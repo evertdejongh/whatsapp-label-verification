@@ -7,7 +7,8 @@
         "Top": 0.164,
         "Width": 0.285,
         "Height": 0.044
-      }
+      },
+      "compare_to_reference": true
     },
     {
       "name": "Variety Heading",
@@ -16,7 +17,8 @@
         "Top": 0.161,
         "Width": 0.196,
         "Height": 0.046
-      }
+      },
+      "compare_to_reference": true
     },
     {
       "name": "Class heading",
@@ -25,7 +27,8 @@
         "Top": 0.345,
         "Width": 0.243,
         "Height": 0.051
-      }
+      },
+      "compare_to_reference": true
     },
     {
       "name": "Origin",
@@ -34,7 +37,8 @@
         "Top": 0.492,
         "Width": 0.308,
         "Height": 0.101
-      }
+      },
+      "compare_to_reference": true
     },
     {
       "name": "Addresses",

@@ -503,9 +503,13 @@ def _expand_box(box, pad):
 
 def align_zone_locally(matcher, box, zone_name="", upscale=2):
     """
-    Returns a list of candidate aligned/upscaled crops for this zone, most
+    Returns a list of (crop_bytes, crop_box) candidates for this zone, most
     trustworthy first, so the caller can fall through to the next one if
-    OCR finds nothing in the first. Fit from ORB matches found only in a
+    OCR finds nothing in the first. crop_box is the actual fractional
+    region each crop was drawn from (which may be padded well beyond the
+    nominal box), so callers doing a reference comparison can crop the
+    same region on the reference side instead of assuming the nominal box.
+    Fit from ORB matches found only in a
     padded window around the zone -- not the whole label or a fixed half of
     it -- so it only requires that one neighborhood be locally flat, making
     it robust to damage (a lifted corner, a wrinkle) located anywhere else
@@ -587,7 +591,7 @@ def align_zone_locally(matcher, box, zone_name="", upscale=2):
         warped = cv2.warpPerspective(user_img, matrix, (ref_w, ref_h))
         crop = crop_zone_png(warped, crop_box, upscale)
         if crop:
-            candidates.append(crop)
+            candidates.append((crop, crop_box))
 
     # A whole-image homography can be inaccurate deep into a region far from
     # whatever matches anchored it -- not just mispositioned but genuinely
@@ -601,12 +605,12 @@ def align_zone_locally(matcher, box, zone_name="", upscale=2):
     if not fit_source.startswith("local"):
         raw_crop = crop_zone_png(user_img, crop_box, upscale)
         if raw_crop:
-            candidates.append(raw_crop)
+            candidates.append((raw_crop, crop_box))
 
     if not candidates:
         fallback = crop_zone_png(user_img, box, upscale)
         if fallback:
-            candidates.append(fallback)
+            candidates.append((fallback, box))
 
     return candidates
 
@@ -870,7 +874,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             # fallback candidate at all.
             user_lines = []
             failure_reason = "Missing / Empty"
-            for candidate_bytes in crop_candidates:
+            for candidate_bytes, candidate_box in crop_candidates:
                 if use_vision_llm:
                     candidate_lines = detect_zone_lines_vision_llm(candidate_bytes, vision_llm_api_key)
                 elif use_textract:
@@ -880,16 +884,22 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                     candidate_lines = [b['DetectedText'].strip() for b in user_analysis.get('TextDetections', []) if b['Type'] == 'LINE']
 
                 user_lines = candidate_lines
+                # Compare against a reference crop from the same region the
+                # candidate actually came from (candidate_box), not the
+                # zone's nominal box -- a fallback candidate is often cropped
+                # from a padded region well beyond the nominal box, and
+                # comparing that to a tight reference crop guarantees a
+                # false mismatch regardless of actual content.
                 failure_reason = evaluate_zone(
                     candidate_lines, expected_pattern, compare_to_reference,
-                    expected_token_count, token_count_tolerance, matcher["ref_img"], box
+                    expected_token_count, token_count_tolerance, matcher["ref_img"], candidate_box
                 )
                 if failure_reason is None:
                     break
 
             if failure_reason and debug_key_prefix:
                 safe_zone_name = re.sub(r'[^A-Za-z0-9_-]+', '_', zone_name)
-                for i, candidate_bytes in enumerate(crop_candidates):
+                for i, (candidate_bytes, _candidate_box) in enumerate(crop_candidates):
                     try:
                         s3_client.put_object(
                             Bucket=BUCKET_NAME,
@@ -921,7 +931,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 f"• Spec Reference: *{spec_code}*\n"
                 f"• Target Zones Checked: *{total_regions} blocks*\n"
                 f"• Passed Blocks:\n{passed_list_str}\n\n"
-                f"_All required zones contain content._"
+                f"_All required zones matched their expected content._"
             ), zone_content
         else:
             failed_list = "\n".join([f"  - ❌ {fz}" for fz in failed_zones])
