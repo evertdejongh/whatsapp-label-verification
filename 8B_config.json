@@ -1,0 +1,51 @@
+{
+  "target_regions": [
+    {
+      "name": "Commodity Heading",
+      "box": {
+        "Left": 0.037,
+        "Top": 0.164,
+        "Width": 0.285,
+        "Height": 0.044
+      }
+    },
+    {
+      "name": "Variety Heading",
+      "box": {
+        "Left": 0.348,
+        "Top": 0.161,
+        "Width": 0.196,
+        "Height": 0.046
+      }
+    },
+    {
+      "name": "Class heading",
+      "box": {
+        "Left": 0.175,
+        "Top": 0.345,
+        "Width": 0.243,
+        "Height": 0.051
+      }
+    },
+    {
+      "name": "Origin",
+      "box": {
+        "Left": 0.656,
+        "Top": 0.492,
+        "Width": 0.308,
+        "Height": 0.101
+      },
+      "use_vision_llm": true,
+      "expected_token_count": 23
+    },
+    {
+      "name": "Addresses",
+      "box": {
+        "Left": 0.03,
+        "Top": 0.778,
+        "Width": 0.932,
+        "Height": 0.13
+      }
+    }
+  ]
+}
