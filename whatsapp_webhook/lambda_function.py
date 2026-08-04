@@ -1061,6 +1061,7 @@ def handle_text_message(sender, msg, access_token, phone_number_id, sender_name=
             except Exception as ex:
                 logger.error(f"Failed to send spec sheet PDF: {str(ex)}")
 
+        send_whatsapp_message(sender, f"✅ All available information for spec *{spec_code}* has been sent.", access_token, phone_number_id)
         write_audit_record(sender, message_id, 'text', spec_code, 'SPEC_SENT', sender_name=sender_name)
     else:
         display_code = raw_text[:32] if raw_text else ''
