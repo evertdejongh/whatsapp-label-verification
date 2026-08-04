@@ -25,6 +25,7 @@ BUCKET_NAME = os.environ.get('SPEC_BUCKET_NAME', 'dole-pallet-specs-2026-6775135
 DEDUP_TABLE_NAME = os.environ.get('DEDUP_TABLE_NAME', 'whatsapp-processed-messages')
 DEDUP_TTL_SECONDS = 24 * 60 * 60
 AUDIT_TABLE_NAME = os.environ.get('AUDIT_TABLE_NAME', 'whatsapp-audit-log')
+SPEC_CATALOG_TABLE_NAME = os.environ.get('SPEC_CATALOG_TABLE_NAME', 'whatsapp-spec-catalog')
 
 SPEC_CODE_PATTERN = re.compile(r'^[A-Z0-9_-]{1,32}$')
 REFERENCE_MATCH_THRESHOLD = 0.6
@@ -228,6 +229,81 @@ def send_whatsapp_image_bytes(recipient_id, image_bytes, mime_type, caption, acc
             return response.read().decode('utf-8')
     except urllib.error.HTTPError as e:
         logger.error(f"META REJECTED IMAGE MESSAGE ({caption}): Status {e.code} - Response: {e.read().decode('utf-8')}")
+        return None
+
+
+def send_whatsapp_document_bytes(recipient_id, doc_bytes, filename, caption, access_token, phone_number_id):
+    upload_url = f"https://graph.facebook.com/v21.0/{phone_number_id}/media"
+    boundary = "BoundaryString334455"
+
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="messaging_product"\r\n\r\n'
+        f"whatsapp\r\n"
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: application/pdf\r\n\r\n"
+    ).encode('utf-8') + doc_bytes + f"\r\n--{boundary}--\r\n".encode('utf-8')
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}"
+    }
+
+    try:
+        req_upload = urllib.request.Request(upload_url, data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req_upload) as resp:
+            response_data = json.loads(resp.read().decode('utf-8'))
+            media_id = response_data.get('id')
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode('utf-8') if hasattr(e, 'read') else str(e)
+        logger.error(f"META DOCUMENT UPLOAD FAILED ({caption}): Status {e.code} - Response: {err_body}")
+        return None
+    except Exception as e:
+        logger.error(f"META DOCUMENT UPLOAD EXCEPTION ({caption}): {str(e)}")
+        return None
+
+    if not media_id:
+        logger.error(f"Failed to obtain media ID from Meta for document {caption}")
+        return None
+
+    msg_url = f"https://graph.facebook.com/v21.0/{phone_number_id}/messages"
+    msg_headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient_id,
+        "type": "document",
+        "document": {
+            "id": media_id,
+            "caption": caption,
+            "filename": filename
+        }
+    }
+    data = json.dumps(payload).encode('utf-8')
+    req_msg = urllib.request.Request(msg_url, data=data, headers=msg_headers, method='POST')
+    try:
+        with urllib.request.urlopen(req_msg) as response:
+            return response.read().decode('utf-8')
+    except urllib.error.HTTPError as e:
+        logger.error(f"META REJECTED DOCUMENT MESSAGE ({caption}): Status {e.code} - Response: {e.read().decode('utf-8')}")
+        return None
+
+
+def get_spec_pdf(spec_code):
+    """Looks up the cached spec-sheet PDF for a spec code in the spec catalog table."""
+    table = dynamodb.Table(SPEC_CATALOG_TABLE_NAME)
+    try:
+        res = table.get_item(Key={'spec_code': spec_code})
+        item = res.get('Item')
+        if not item or not item.get('pdf_s3_key'):
+            return None
+        return item['pdf_s3_key']
+    except ClientError as e:
+        logger.error(f"Spec catalog lookup failed for '{spec_code}': {str(e)}")
         return None
 
 
@@ -972,6 +1048,18 @@ def handle_text_message(sender, msg, access_token, phone_number_id, sender_name=
             send_whatsapp_image_bytes(sender, label_bytes, "image/png", f"🏷️ {spec_code} - Label Example [{cache_buster}]", access_token, phone_number_id)
         except Exception as ex:
             logger.error(f"Failed to send label example image: {str(ex)}")
+
+        pdf_key = get_spec_pdf(spec_code)
+        if pdf_key:
+            try:
+                pdf_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=pdf_key)
+                pdf_bytes = pdf_obj['Body'].read()
+                send_whatsapp_document_bytes(
+                    sender, pdf_bytes, f"{spec_code}_specsheet.pdf",
+                    f"📄 {spec_code} - Full Pack Specification", access_token, phone_number_id
+                )
+            except Exception as ex:
+                logger.error(f"Failed to send spec sheet PDF: {str(ex)}")
 
         write_audit_record(sender, message_id, 'text', spec_code, 'SPEC_SENT', sender_name=sender_name)
     else:
