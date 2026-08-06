@@ -553,15 +553,19 @@ def handle_catalog_post(token, form):
 
         try:
             existing = table.get_item(Key={'spec_code': spec_code}).get('Item') or {}
+            existing_pdf_url = (existing.get('pdf_url') or '').strip()
             pdf_s3_key = existing.get('pdf_s3_key')
 
-            if pdf_url and pdf_url != existing.get('pdf_url'):
-                pdf_bytes = download_pdf(pdf_url)
-                s3_key = f"specs/{spec_code}_specsheet.pdf"
-                s3_client.put_object(Bucket=SPEC_BUCKET_NAME, Key=s3_key, Body=pdf_bytes, ContentType='application/pdf')
-                pdf_s3_key = s3_key
-            elif not pdf_url:
-                pdf_s3_key = None
+            if pdf_url != existing_pdf_url:
+                if pdf_url:
+                    pdf_bytes = download_pdf(pdf_url)
+                    s3_key = f"specs/{spec_code}_specsheet.pdf"
+                    s3_client.put_object(Bucket=SPEC_BUCKET_NAME, Key=s3_key, Body=pdf_bytes, ContentType='application/pdf')
+                    pdf_s3_key = s3_key
+                else:
+                    if pdf_s3_key:
+                        s3_client.delete_object(Bucket=SPEC_BUCKET_NAME, Key=pdf_s3_key)
+                    pdf_s3_key = None
 
             item = {'spec_code': spec_code, 'description': description}
             if pdf_url:
