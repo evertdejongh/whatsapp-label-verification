@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -228,6 +229,17 @@ def html_escape(value):
     )
 
 
+def spec_code_sort_key(code):
+    """Natural sort for spec codes (leading digits, then trailing letters) --
+    a plain string sort puts "10A" before "1A" (since "0" < "A"), which reads
+    as out of order to anyone scanning the list numerically. Shared by the
+    Spec Catalog and Spec Files tabs, which both list specs this way."""
+    match = re.match(r'^(\d+)(.*)$', code)
+    if match:
+        return (0, int(match.group(1)), match.group(2))
+    return (1, 0, code)
+
+
 def render_nav(token, active):
     token_qs = html_escape(token)
     return f"""<div class="nav">
@@ -411,7 +423,7 @@ def scan_spec_catalog():
     while 'LastEvaluatedKey' in resp:
         resp = table.scan(ExclusiveStartKey=resp['LastEvaluatedKey'])
         items.extend(resp.get('Items', []))
-    return sorted(items, key=lambda i: i.get('spec_code', ''))
+    return sorted(items, key=lambda i: spec_code_sort_key(i.get('spec_code', '')))
 
 
 EDIT_FORM_ID = "catalog-edit-form"
@@ -621,7 +633,8 @@ def render_table_subnav(token, active_table):
     token_esc = html_escape(token)
     links = "".join(
         f"<a href='?token={token_esc}&view=tables&table={html_escape(t)}' "
-        f"class='{'active' if t == active_table else ''}' style='font-size:12px;padding:5px 12px'>{html_escape(t)}</a>"
+        f"class='{'active' if t == active_table else ''}' style='font-size:12px;padding:5px 12px'>"
+        f"{html_escape(t.removeprefix('whatsapp-'))}</a>"
         for t in TABLE_REGISTRY
     )
     return f"<div class='nav' style='margin-bottom:10px'>{links}</div>"
@@ -849,6 +862,21 @@ FILES_SCRIPT = """
     btn.addEventListener('click', function() { fileInput.click(); });
     fileInput.addEventListener('change', function() {
       if (!fileInput.files.length) return;
+      // The "+ upload a new file" form has a filename text box the user can
+      // type into ahead of time to override the name -- but leaving it
+      // blank (the common case) used to silently upload nothing at all,
+      // since the server has no key to put_object under. Default it from
+      // the picked file's own name instead of requiring that step.
+      var filenameInput = form.querySelector('input[name="filename"]');
+      if (filenameInput && !filenameInput.value.trim()) {
+        var pickedName = fileInput.files[0].name;
+        var specInput = form.querySelector('input[name="spec"]');
+        var specCode = specInput ? specInput.value.trim() : '';
+        if (specCode && pickedName.toUpperCase().indexOf(specCode.toUpperCase() + '_') !== 0) {
+          pickedName = specCode + '_' + pickedName;
+        }
+        filenameInput.value = pickedName;
+      }
       var reader = new FileReader();
       reader.onload = function() {
         var result = reader.result;
@@ -954,7 +982,7 @@ def render_spec_selector(token, groups, active_spec, descriptions):
         f"class='{'active' if code == active_spec else ''}' style='font-size:12px;padding:5px 12px' "
         f"title='{html_escape(descriptions.get(code, 'No Spec Catalog description on file'))}'>"
         f"{html_escape(code)} ({len(items)})</a>"
-        for code, items in sorted(groups.items())
+        for code, items in sorted(groups.items(), key=lambda pair: spec_code_sort_key(pair[0]))
     )
     return f"<div class='nav' style='flex-wrap:wrap;margin-bottom:14px'>{chips}</div>"
 
@@ -1045,10 +1073,12 @@ def render_file_row(token, spec_code, f, editing, error=None, content_override=N
     )
 
 
-def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_override, descriptions):
+def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_override, descriptions, page_error=None):
     token_esc = html_escape(token)
     selector = render_spec_selector(token, groups, spec_code, descriptions)
     spec_files = sorted(groups.get(spec_code, []), key=lambda f: f['filename'])
+
+    page_error_html = f"<div class='error'>{html_escape(page_error)}</div>" if page_error else ""
 
     spec_description = descriptions.get(spec_code, '')
     description_banner = ""
@@ -1090,6 +1120,7 @@ def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_ov
 
     body = f"""
   {selector}
+  {page_error_html}
   {description_banner}
   <div class="toolbar">{new_config_link}</div>
   {upload_form}
@@ -1126,7 +1157,7 @@ def handle_files_get(token, query_params):
     groups = group_spec_files(files)
     spec_code = query_params.get('spec', '').strip()
     if not spec_code and groups:
-        spec_code = sorted(groups.keys())[0]
+        spec_code = sorted(groups.keys(), key=spec_code_sort_key)[0]
 
     edit_key = query_params.get('edit', '').strip() or None
     descriptions = load_spec_descriptions()
@@ -1157,7 +1188,13 @@ def handle_files_post(token, form):
         else:
             filename = form.get('filename', [''])[0].strip()
             key = f"specs/{filename}" if filename else None
-        if key and content_b64:
+
+        upload_error = None
+        if not key:
+            upload_error = "Upload failed: no filename given."
+        elif not content_b64:
+            upload_error = "Upload failed: no file was selected."
+        else:
             try:
                 s3_client.put_object(
                     Bucket=SPEC_BUCKET_NAME, Key=key,
@@ -1165,6 +1202,24 @@ def handle_files_post(token, form):
                 )
             except Exception as e:
                 logger.error(f"Failed to upload {key}: {str(e)}")
+                upload_error = f"Upload failed: {str(e)}"
+
+        if upload_error:
+            # A silent no-op here (the original behavior) is exactly what
+            # produced the bug this replaced: a blank/failed upload just
+            # redirected back to an unchanged page with no indication
+            # anything went wrong.
+            try:
+                files = list_spec_files()
+            except Exception:
+                files = []
+            groups = group_spec_files(files)
+            html = render_files(
+                token, groups, spec_code, edit_key=None, edit_error=None, edit_content_override=None,
+                descriptions=load_spec_descriptions(), page_error=upload_error
+            )
+            return html_response(html)
+
         return redirect_response(files_qs)
 
     if action == 'save_json':

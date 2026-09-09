@@ -246,6 +246,21 @@ class SpecFilesTests(unittest.TestCase):
             Body=b'{}', ContentType='application/json',
         )
 
+    def test_upload_new_with_blank_filename_shows_error_instead_of_silent_noop(self):
+        content = base64.b64encode(b'\x89PNGfakebytes').decode('utf-8')
+        self.s3.list_objects_v2.return_value = {'Contents': []}
+        form = {
+            'action': ['upload_new'],
+            'spec': ['14C'],
+            'filename': [''],
+            'content_b64': [content],
+        }
+        response = dashboard.handle_files_post('token', form)
+
+        self.s3.put_object.assert_not_called()
+        self.assertEqual(200, response['statusCode'])
+        self.assertIn('no filename', response['body'])
+
     def test_save_json_valid_writes_object(self):
         form = {
             'action': ['save_json'],
