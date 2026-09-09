@@ -22,6 +22,23 @@ IMAGE_URL_TTL_SECONDS = 3600
 PAGE_SIZE = 200
 SAST = timezone(timedelta(hours=2))
 
+# Reference tables the "Reference Tables" tab can browse/edit -- a fixed
+# allow-list (not "any table in the account"), same defensive scoping as
+# tools/attach_webhook_lookup_permissions.sh's TABLES array. Value is the
+# list of key attribute names (1 for a plain hash key, 2 for hash+range).
+# whatsapp-audit-log / whatsapp-spec-catalog stay on their own dedicated
+# tabs, deliberately excluded here to avoid two competing UIs for the same
+# data.
+TABLE_REGISTRY = {
+    "whatsapp-puc": ["PUC"],
+    "whatsapp-variety": ["VarietyName", "Commodity"],
+    "whatsapp-variety-group": ["VarietyGroupCode"],
+    "whatsapp-ian-numbers": ["lookup_key"],
+    "whatsapp-commodity": ["Commodity"],
+    "whatsapp-rewe-combinations": ["lookup_key"],
+    "whatsapp-india-addresses": ["Code"],
+}
+
 ssm = boto3.client('ssm', region_name=AWS_REGION)
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
 s3_client = boto3.client(
@@ -216,6 +233,8 @@ def render_nav(token, active):
     return f"""<div class="nav">
     <a href="?token={token_qs}&view=audit" class="{'active' if active == 'audit' else ''}">Audit Log</a>
     <a href="?token={token_qs}&view=catalog" class="{'active' if active == 'catalog' else ''}">Spec Catalog</a>
+    <a href="?token={token_qs}&view=tables" class="{'active' if active == 'tables' else ''}">Reference Tables</a>
+    <a href="?token={token_qs}&view=files" class="{'active' if active == 'files' else ''}">Spec Files</a>
   </div>"""
 
 
@@ -587,6 +606,592 @@ def handle_catalog_post(token, form):
 
 
 # ---------------------------------------------------------------------------
+# Reference Tables view: generic browse/add/edit/delete for any table in
+# TABLE_REGISTRY. Reuses the exact Spec Catalog select-row-then-toolbar
+# pattern (ROW_SELECT_SCRIPT is fully generic already -- it just treats
+# data-code as an opaque string) and the Audit Log's scan-with-pagination
+# pattern (encode_key/decode_key as the continuation token), generalized
+# from 1 hardcoded key field to N key fields from TABLE_REGISTRY.
+# ---------------------------------------------------------------------------
+
+TABLE_EDIT_FORM_ID = "table-edit-form"
+
+
+def render_table_subnav(token, active_table):
+    token_esc = html_escape(token)
+    links = "".join(
+        f"<a href='?token={token_esc}&view=tables&table={html_escape(t)}' "
+        f"class='{'active' if t == active_table else ''}' style='font-size:12px;padding:5px 12px'>{html_escape(t)}</a>"
+        for t in TABLE_REGISTRY
+    )
+    return f"<div class='nav' style='margin-bottom:10px'>{links}</div>"
+
+
+def render_table_row(key_attrs, item, columns):
+    row_key = {k: item.get(k) for k in key_attrs}
+    encoded = encode_key(row_key)
+    cells = "".join(f"<td>{html_escape(item.get(c, ''))}</td>" for c in columns)
+    return f"<tr class='selectable' data-code='{html_escape(encoded)}'>{cells}<td></td></tr>"
+
+
+def render_table_edit_row(token, table_name, key_attrs, item, columns, is_new):
+    cells = []
+    for col in columns:
+        val = html_escape(item.get(col, '')) if item else ''
+        name = f"col::{html_escape(col)}"
+        if col in key_attrs:
+            if is_new:
+                cells.append(f"<td><input type='text' name='{name}' form='{TABLE_EDIT_FORM_ID}' value='{val}' required></td>")
+            else:
+                cells.append(f"<td>{val}<input type='hidden' name='{name}' form='{TABLE_EDIT_FORM_ID}' value='{val}'></td>")
+        else:
+            cells.append(f"<td><input type='text' name='{name}' form='{TABLE_EDIT_FORM_ID}' value='{val}'></td>")
+
+    extra_cell = (
+        f"<td>"
+        f"<input type='text' name='extra_name' form='{TABLE_EDIT_FORM_ID}' placeholder='field name' style='width:47%'> "
+        f"<input type='text' name='extra_value' form='{TABLE_EDIT_FORM_ID}' placeholder='value' style='width:47%'>"
+        f"</td>"
+    )
+
+    row_key_encoded = html_escape(encode_key({k: item.get(k) for k in key_attrs})) if item and not is_new else ''
+    cancel_qs = f"?token={html_escape(token)}&view=tables&table={html_escape(table_name)}"
+    actions_cell = (
+        f"<td class='actions'>"
+        f"<input type='hidden' name='row_key' form='{TABLE_EDIT_FORM_ID}' value='{row_key_encoded}'>"
+        f"<input type='hidden' name='is_new' form='{TABLE_EDIT_FORM_ID}' value='{'1' if is_new else '0'}'>"
+        f"<button type='submit' form='{TABLE_EDIT_FORM_ID}' class='primary'>Save</button>"
+        f"<a class='btn' href='{cancel_qs}'>Cancel</a>"
+        f"</td>"
+    )
+    return "<tr class='editing'>" + "".join(cells) + extra_cell + actions_cell + "</tr>"
+
+
+def render_tables(token, table_name, key_attrs, items, columns, edit_item, adding_new, next_key, error):
+    edit_key = {k: edit_item.get(k) for k in key_attrs} if edit_item else None
+
+    rows = []
+    if adding_new:
+        rows.append(render_table_edit_row(token, table_name, key_attrs, item=None, columns=columns, is_new=True))
+    for item in items:
+        item_key = {k: item.get(k) for k in key_attrs}
+        if edit_key and item_key == edit_key:
+            rows.append(render_table_edit_row(token, table_name, key_attrs, item=item, columns=columns, is_new=False))
+        else:
+            rows.append(render_table_row(key_attrs, item, columns))
+
+    header_cells = "".join(f"<th>{html_escape(c)}</th>" for c in columns) + "<th>Extra field</th><th>Actions</th>"
+    filter_cells = "".join(f"<td><input type='text' data-col='{i}' placeholder='Filter...'></td>" for i in range(len(columns))) + "<td></td><td></td>"
+
+    error_html = f"<div class='error'>{html_escape(error)}</div>" if error else ""
+    token_esc = html_escape(token)
+    table_esc = html_escape(table_name)
+
+    body = f"""
+  {render_table_subnav(token, table_name)}
+  <div class="sub">{len(items)} row(s) shown from <b>{table_esc}</b> (page size {PAGE_SIZE}). Click a row to select it, then Edit or Delete.</div>
+  {error_html}
+
+  <div class="toolbar">
+    <a class="btn primary" href="?token={token_esc}&view=tables&table={table_esc}&edit=__new__">+ New</a>
+    <a id="editBtn" class="btn disabled" href="#" data-href-base="?token={token_esc}&view=tables&table={table_esc}&edit=">Edit</a>
+    <button id="deleteBtn" class="btn danger" disabled type="button">Delete</button>
+  </div>
+
+  <form id="{TABLE_EDIT_FORM_ID}" method="post">
+    <input type="hidden" name="token" value="{token_esc}">
+    <input type="hidden" name="view" value="tables">
+    <input type="hidden" name="table" value="{table_esc}">
+    <input type="hidden" name="action" value="save">
+  </form>
+
+  <form id="deleteForm" method="post" style="display:none">
+    <input type="hidden" name="token" value="{token_esc}">
+    <input type="hidden" name="view" value="tables">
+    <input type="hidden" name="table" value="{table_esc}">
+    <input type="hidden" name="action" value="delete">
+    <input type="hidden" id="deleteSpecCode" name="row_key" value="">
+  </form>
+
+  <div class="wrap">
+  <table id="catalogTable">
+    <thead>
+      <tr>{header_cells}</tr>
+      <tr class="filter-row">{filter_cells}</tr>
+    </thead>
+    <tbody>
+      {''.join(rows) if rows else f'<tr><td colspan="{len(columns) + 2}">No rows.</td></tr>'}
+    </tbody>
+  </table>
+  </div>
+"""
+    if next_key:
+        qs = f"?token={token_esc}&view=tables&table={table_esc}&last_key={html_escape(encode_key(next_key))}"
+        body += f"<a class='more' href='{qs}'>Load more &rarr;</a>"
+
+    return page_shell(f"WhatsApp Label Verification - {table_name}", render_nav(token, 'tables'), body, extra_script=ROW_SELECT_SCRIPT)
+
+
+def handle_tables_get(token, query_params):
+    table_name = query_params.get('table', '').strip()
+    if table_name not in TABLE_REGISTRY:
+        table_name = next(iter(TABLE_REGISTRY))
+    key_attrs = TABLE_REGISTRY[table_name]
+    last_key = decode_key(query_params.get('last_key'))
+
+    table = dynamodb.Table(table_name)
+    scan_kwargs = {'Limit': PAGE_SIZE}
+    if last_key:
+        scan_kwargs['ExclusiveStartKey'] = last_key
+    try:
+        response = table.scan(**scan_kwargs)
+        items = response.get('Items', [])
+        next_key = response.get('LastEvaluatedKey')
+    except Exception as e:
+        logger.error(f"Failed to scan {table_name}: {str(e)}")
+        return text_response(500, f'Error loading {table_name}: {str(e)}')
+
+    columns = list(key_attrs)
+    for item in items:
+        for k in item.keys():
+            if k not in columns:
+                columns.append(k)
+
+    edit_item = None
+    adding_new = False
+    edit_param = query_params.get('edit', '').strip()
+    if edit_param == '__new__':
+        adding_new = True
+    elif edit_param:
+        row_key = decode_key(edit_param)
+        if row_key:
+            try:
+                edit_item = table.get_item(Key=row_key).get('Item')
+            except Exception as e:
+                logger.error(f"Failed to load row for edit in {table_name}: {str(e)}")
+
+    html = render_tables(token, table_name, key_attrs, items, columns, edit_item, adding_new, next_key, error=None)
+    return html_response(html)
+
+
+def handle_tables_post(token, form):
+    table_name = form.get('table', [''])[0]
+    if table_name not in TABLE_REGISTRY:
+        return redirect_response(f"?token={urllib.parse.quote(token)}&view=tables")
+    key_attrs = TABLE_REGISTRY[table_name]
+    action = form.get('action', [''])[0]
+    table = dynamodb.Table(table_name)
+    table_qs = f"?token={urllib.parse.quote(token)}&view=tables&table={urllib.parse.quote(table_name)}"
+
+    if action == 'delete':
+        row_key = decode_key(form.get('row_key', [''])[0])
+        if row_key:
+            try:
+                table.delete_item(Key=row_key)
+            except Exception as e:
+                logger.error(f"Failed to delete row from {table_name}: {str(e)}")
+        return redirect_response(table_qs)
+
+    if action == 'save':
+        item = {}
+        for field_name, values in form.items():
+            if field_name.startswith('col::'):
+                col = field_name[len('col::'):]
+                val = (values[0] if values else '').strip()
+                if val:
+                    item[col] = val
+        extra_name = form.get('extra_name', [''])[0].strip()
+        extra_value = form.get('extra_value', [''])[0].strip()
+        if extra_name and extra_value:
+            item[extra_name] = extra_value
+
+        # Key fields are marked `required` client-side; a submission missing
+        # one (e.g. a bypassed/malformed request) is silently dropped rather
+        # than saved with a partial/ambiguous key -- no data corruption, just
+        # a no-op back to the list.
+        if all(item.get(k) for k in key_attrs):
+            try:
+                table.put_item(Item=item)
+            except Exception as e:
+                logger.error(f"Failed to save row in {table_name}: {str(e)}")
+
+        return redirect_response(table_qs)
+
+    return redirect_response(table_qs)
+
+
+# ---------------------------------------------------------------------------
+# Spec Files view: browse/edit/upload/delete the S3 specs/ prefix (label
+# images, allowed-combination images, spec sheets, and the JSON validation
+# configs). Editing a .json inline (view+save via a textarea) replaces the
+# manual "edit locally, then `aws s3 cp`" loop used everywhere else this
+# session. File uploads are read client-side (FileReader -> base64 -> a
+# hidden field on the same urlencoded form) rather than parsed server-side
+# as multipart/form-data -- avoids the deprecated `cgi` module and any new
+# dependency, and comfortably fits Lambda's 6MB synchronous payload limit at
+# this bucket's file sizes.
+# ---------------------------------------------------------------------------
+
+FILES_SCRIPT = """
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<style>
+  .CodeMirror { border: 1px solid #d3d8e0; border-radius: 6px; height: auto; font-size: 12px; }
+</style>
+<script>
+(function() {
+  document.querySelectorAll('.replaceBtn').forEach(function(btn) {
+    var form = btn.closest('form');
+    var fileInput = form.querySelector('.fileInput');
+    var b64Target = form.querySelector('.b64target');
+    btn.addEventListener('click', function() { fileInput.click(); });
+    fileInput.addEventListener('change', function() {
+      if (!fileInput.files.length) return;
+      var reader = new FileReader();
+      reader.onload = function() {
+        var result = reader.result;
+        b64Target.value = result.substring(result.indexOf(',') + 1);
+        form.submit();
+      };
+      reader.readAsDataURL(fileInput.files[0]);
+    });
+  });
+
+  // Wraps the raw JSON textarea with CodeMirror (syntax highlighting, bracket
+  // matching, line numbers) and validates on every keystroke instead of only
+  // after Save is clicked -- CodeMirror.fromTextArea keeps the original
+  // <textarea> in the DOM (just hidden) and .save() copies the editor's
+  // content back into it, so the existing form/POST handling needs no change.
+  document.querySelectorAll('textarea.json-editor').forEach(function(textarea) {
+    if (typeof CodeMirror === 'undefined') return;
+    var errorBox = textarea.parentElement.querySelector('.json-editor-error');
+    var editor = CodeMirror.fromTextArea(textarea, {
+      mode: 'application/json',
+      lineNumbers: true,
+      matchBrackets: true,
+      indentUnit: 2,
+      tabSize: 2,
+      viewportMargin: Infinity,
+    });
+    editor.setSize('100%', '480px');
+
+    function validate() {
+      try {
+        JSON.parse(editor.getValue());
+        if (errorBox) errorBox.style.display = 'none';
+        return true;
+      } catch (e) {
+        if (errorBox) {
+          errorBox.textContent = 'Invalid JSON: ' + e.message;
+          errorBox.style.display = 'block';
+        }
+        return false;
+      }
+    }
+    editor.on('change', validate);
+    validate();
+
+    var form = textarea.closest('form');
+    if (form) {
+      form.addEventListener('submit', function(e) {
+        editor.save();
+        if (!validate()) { e.preventDefault(); }
+      });
+    }
+  });
+})();
+</script>
+"""
+
+
+def guess_content_type(key):
+    if key.endswith('.json'):
+        return 'application/json'
+    if key.endswith('.png'):
+        return 'image/png'
+    if key.endswith(('.jpg', '.jpeg')):
+        return 'image/jpeg'
+    if key.endswith('.pdf'):
+        return 'application/pdf'
+    return 'application/octet-stream'
+
+
+def list_spec_files():
+    files = []
+    continuation = None
+    while True:
+        kwargs = {'Bucket': SPEC_BUCKET_NAME, 'Prefix': 'specs/'}
+        if continuation:
+            kwargs['ContinuationToken'] = continuation
+        resp = s3_client.list_objects_v2(**kwargs)
+        for obj in resp.get('Contents', []):
+            key = obj['Key']
+            filename = key[len('specs/'):]
+            if not filename:
+                continue
+            files.append({'key': key, 'filename': filename, 'size': obj['Size'], 'last_modified': obj['LastModified']})
+        if resp.get('IsTruncated'):
+            continuation = resp.get('NextContinuationToken')
+        else:
+            break
+    return files
+
+
+def group_spec_files(files):
+    groups = {}
+    for f in files:
+        code = f['filename'].split('_', 1)[0]
+        groups.setdefault(code, []).append(f)
+    return groups
+
+
+def render_spec_selector(token, groups, active_spec, descriptions):
+    token_esc = html_escape(token)
+    chips = "".join(
+        f"<a href='?token={token_esc}&view=files&spec={html_escape(code)}' "
+        f"class='{'active' if code == active_spec else ''}' style='font-size:12px;padding:5px 12px' "
+        f"title='{html_escape(descriptions.get(code, 'No Spec Catalog description on file'))}'>"
+        f"{html_escape(code)} ({len(items)})</a>"
+        for code, items in sorted(groups.items())
+    )
+    return f"<div class='nav' style='flex-wrap:wrap;margin-bottom:14px'>{chips}</div>"
+
+
+def render_file_row(token, spec_code, f, editing, error=None, content_override=None):
+    key = f['key']
+    filename = f['filename']
+    is_json = filename.endswith('.json')
+    is_image = filename.lower().endswith(('.png', '.jpg', '.jpeg'))
+    size_kb = f"{f['size'] / 1024:.1f} KB"
+    modified = f['last_modified'].strftime('%Y-%m-%d %H:%M') if hasattr(f['last_modified'], 'strftime') else str(f['last_modified'])
+    token_esc = html_escape(token)
+
+    if editing and is_json:
+        if content_override is not None:
+            content = content_override
+        else:
+            try:
+                content = s3_client.get_object(Bucket=SPEC_BUCKET_NAME, Key=key)['Body'].read().decode('utf-8')
+            except s3_client.exceptions.NoSuchKey:
+                content = '{\n  \n}\n'
+            except Exception as e:
+                content = f'{{\n  "_error": "Failed to load: {str(e)}"\n}}'
+        cancel_qs = f"?token={token_esc}&view=files&spec={html_escape(spec_code)}"
+        error_html = f"<div class='error'>{html_escape(error)}</div>" if error else ""
+        return f"""
+    <div class="wrap" style="margin-bottom:14px;padding:12px">
+      {error_html}
+      <div style="font-weight:600;margin-bottom:6px">{html_escape(filename)}</div>
+      <form method="post">
+        <input type="hidden" name="token" value="{token_esc}">
+        <input type="hidden" name="view" value="files">
+        <input type="hidden" name="action" value="save_json">
+        <input type="hidden" name="key" value="{html_escape(key)}">
+        <input type="hidden" name="spec" value="{html_escape(spec_code)}">
+        <textarea name="content" class="json-editor" rows="20" style="width:100%;font-family:monospace;font-size:12px">{html_escape(content)}</textarea>
+        <div class="error json-editor-error" style="display:none"></div>
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button type="submit" class="primary">Save</button>
+          <a class="btn" href="{cancel_qs}">Cancel</a>
+        </div>
+      </form>
+    </div>
+"""
+
+    thumb = ""
+    if is_image:
+        url = get_presigned_url(key)
+        thumb = f"<a href='{html_escape(url)}' target='_blank' rel='noopener'><img class='thumb' style='height:70px' src='{html_escape(url)}' loading='lazy'></a>"
+    elif filename.endswith('.pdf'):
+        url = get_presigned_url(key)
+        thumb = f"<a class='pill yes' href='{html_escape(url)}' target='_blank' rel='noopener'>PDF &#10003;</a>"
+
+    actions = []
+    if is_json:
+        actions.append(f"<a class='btn' href='?token={token_esc}&view=files&spec={html_escape(spec_code)}&edit={urllib.parse.quote(key)}'>Edit</a>")
+    actions.append(f"""
+      <form method="post" style="display:inline">
+        <input type="hidden" name="token" value="{token_esc}">
+        <input type="hidden" name="view" value="files">
+        <input type="hidden" name="action" value="upload">
+        <input type="hidden" name="key" value="{html_escape(key)}">
+        <input type="hidden" name="spec" value="{html_escape(spec_code)}">
+        <input type="hidden" name="content_b64" class="b64target">
+        <input type="file" class="fileInput" style="display:none">
+        <button type="button" class="btn replaceBtn">Replace</button>
+      </form>
+    """)
+    actions.append(f"""
+      <form method="post" style="display:inline" onsubmit="return confirm('Delete {html_escape(filename)}?')">
+        <input type="hidden" name="token" value="{token_esc}">
+        <input type="hidden" name="view" value="files">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="key" value="{html_escape(key)}">
+        <input type="hidden" name="spec" value="{html_escape(spec_code)}">
+        <button type="submit" class="btn danger">Delete</button>
+      </form>
+    """)
+
+    return (
+        "<tr>"
+        f"<td>{html_escape(filename)}</td>"
+        f"<td>{thumb}</td>"
+        f"<td>{size_kb}</td>"
+        f"<td>{html_escape(modified)}</td>"
+        f"<td class='actions'>{''.join(actions)}</td>"
+        "</tr>"
+    )
+
+
+def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_override, descriptions):
+    token_esc = html_escape(token)
+    selector = render_spec_selector(token, groups, spec_code, descriptions)
+    spec_files = sorted(groups.get(spec_code, []), key=lambda f: f['filename'])
+
+    spec_description = descriptions.get(spec_code, '')
+    description_banner = ""
+    if spec_code:
+        description_banner = (
+            f"<div class='sub' style='font-size:15px;font-weight:600;color:#1f2430'>"
+            f"{html_escape(spec_code)} &mdash; {html_escape(spec_description) if spec_description else '<i>no Spec Catalog description on file</i>'}"
+            f"</div>"
+        )
+
+    has_config = any(f['filename'] == f"{spec_code}_config.json" for f in spec_files)
+    new_config_key = f"specs/{spec_code}_config.json" if spec_code else None
+
+    rows = []
+    if spec_code and not has_config and edit_key == new_config_key:
+        synthetic = {'key': new_config_key, 'filename': f"{spec_code}_config.json", 'size': 0, 'last_modified': ''}
+        rows.append(render_file_row(token, spec_code, synthetic, True, edit_error, edit_content_override))
+    for f in spec_files:
+        editing = edit_key == f['key']
+        rows.append(render_file_row(token, spec_code, f, editing, edit_error if editing else None, edit_content_override if editing else None))
+
+    new_config_link = (
+        f"<a class='btn' href='?token={token_esc}&view=files&spec={html_escape(spec_code)}&edit={urllib.parse.quote(new_config_key)}'>+ New config</a>"
+        if spec_code and not has_config else ""
+    )
+
+    upload_form = f"""
+  <form method="post" style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
+    <input type="hidden" name="token" value="{token_esc}">
+    <input type="hidden" name="view" value="files">
+    <input type="hidden" name="action" value="upload_new">
+    <input type="text" name="spec" value="{html_escape(spec_code)}" placeholder="Spec code" style="width:90px">
+    <input type="text" name="filename" placeholder="e.g. 17D_label.png (include spec code prefix)" style="width:280px">
+    <input type="hidden" name="content_b64" class="b64target">
+    <input type="file" class="fileInput" style="display:none">
+    <button type="button" class="btn replaceBtn">Choose file &amp; upload</button>
+  </form>
+"""
+
+    body = f"""
+  {selector}
+  {description_banner}
+  <div class="toolbar">{new_config_link}</div>
+  {upload_form}
+  <div class="wrap">
+  <table>
+    <thead><tr><th>File</th><th>Preview</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead>
+    <tbody>
+      {''.join(rows) if rows else '<tr><td colspan="5">No files for this spec yet.</td></tr>'}
+    </tbody>
+  </table>
+  </div>
+"""
+    return page_shell("WhatsApp Label Verification - Spec Files", render_nav(token, 'files'), body, extra_script=FILES_SCRIPT)
+
+
+def load_spec_descriptions():
+    """Reuses the Spec Catalog table's own `description` field (e.g. "BIEDRONKA
+    | 4.5kg Paper Bags | 2026 | V1.0") so the Spec Files tab can show which
+    retailer/product a spec code actually is, instead of just a bare code."""
+    try:
+        return {item.get('spec_code', ''): item.get('description', '') for item in scan_spec_catalog()}
+    except Exception as e:
+        logger.error(f"Failed to load spec catalog descriptions: {str(e)}")
+        return {}
+
+
+def handle_files_get(token, query_params):
+    try:
+        files = list_spec_files()
+    except Exception as e:
+        logger.error(f"Failed to list spec files: {str(e)}")
+        return text_response(500, f'Error listing spec files: {str(e)}')
+
+    groups = group_spec_files(files)
+    spec_code = query_params.get('spec', '').strip()
+    if not spec_code and groups:
+        spec_code = sorted(groups.keys())[0]
+
+    edit_key = query_params.get('edit', '').strip() or None
+    descriptions = load_spec_descriptions()
+    html = render_files(token, groups, spec_code, edit_key=edit_key, edit_error=None, edit_content_override=None, descriptions=descriptions)
+    return html_response(html)
+
+
+def handle_files_post(token, form):
+    action = form.get('action', [''])[0]
+    spec_code = form.get('spec', [''])[0].strip()
+    files_qs = f"?token={urllib.parse.quote(token)}&view=files"
+    if spec_code:
+        files_qs += f"&spec={urllib.parse.quote(spec_code)}"
+
+    if action == 'delete':
+        key = form.get('key', [''])[0]
+        if key:
+            try:
+                s3_client.delete_object(Bucket=SPEC_BUCKET_NAME, Key=key)
+            except Exception as e:
+                logger.error(f"Failed to delete {key}: {str(e)}")
+        return redirect_response(files_qs)
+
+    if action in ('upload', 'upload_new'):
+        content_b64 = form.get('content_b64', [''])[0]
+        if action == 'upload':
+            key = form.get('key', [''])[0]
+        else:
+            filename = form.get('filename', [''])[0].strip()
+            key = f"specs/{filename}" if filename else None
+        if key and content_b64:
+            try:
+                s3_client.put_object(
+                    Bucket=SPEC_BUCKET_NAME, Key=key,
+                    Body=base64.b64decode(content_b64), ContentType=guess_content_type(key)
+                )
+            except Exception as e:
+                logger.error(f"Failed to upload {key}: {str(e)}")
+        return redirect_response(files_qs)
+
+    if action == 'save_json':
+        key = form.get('key', [''])[0]
+        content = form.get('content', [''])[0]
+        try:
+            json.loads(content)
+            s3_client.put_object(Bucket=SPEC_BUCKET_NAME, Key=key, Body=content.encode('utf-8'), ContentType='application/json')
+        except json.JSONDecodeError as e:
+            try:
+                files = list_spec_files()
+            except Exception:
+                files = []
+            groups = group_spec_files(files)
+            html = render_files(
+                token, groups, spec_code, edit_key=key, edit_error=f"Invalid JSON: {str(e)}",
+                edit_content_override=content, descriptions=load_spec_descriptions()
+            )
+            return html_response(html)
+        except Exception as e:
+            logger.error(f"Failed to save {key}: {str(e)}")
+        return redirect_response(files_qs)
+
+    return redirect_response(files_qs)
+
+
+# ---------------------------------------------------------------------------
 # Response helpers
 # ---------------------------------------------------------------------------
 
@@ -631,6 +1236,14 @@ def lambda_handler(event, context):
             if http_method == 'POST':
                 return handle_catalog_post(token, form)
             return handle_catalog_get(token, query_params)
+        elif view == 'tables':
+            if http_method == 'POST':
+                return handle_tables_post(token, form)
+            return handle_tables_get(token, query_params)
+        elif view == 'files':
+            if http_method == 'POST':
+                return handle_files_post(token, form)
+            return handle_files_get(token, query_params)
         else:
             return handle_audit_log(token, query_params)
     except Exception as e:

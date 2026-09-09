@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .claude/settings.local.json
 ~$*.xlsx
+*_deploy*.zip
+webhook-reference-tables-policy.json
+regex_test.txt
