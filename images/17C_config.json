@@ -1,0 +1,88 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "ExporterName": "the value printed next to the first 'EXPORTER NAME:' heading",
+    "ExporterAddress": "the value printed next to the 'ADDRESS:' heading directly below 'EXPORTER NAME:'",
+    "PackerName": "the value printed next to the 'PACKER NAME:' heading",
+    "PackerAddress": "the value printed next to the 'ADDRESS:' heading directly below 'PACKER NAME:'",
+    "ImporterName": "the value printed next to 'IMPORTER NAME :'",
+    "ImporterAddress": "the address lines printed next to '&' and 'ADDRESS:' beneath 'IMPORTER NAME :', combined into one block (do not include the importer name itself)",
+    "FSSAILicense": "the number printed next to 'FSSAI LICENSE NUMBER:'",
+    "PackingDate": "the value printed next to 'Packing Date:'",
+    "LotNumber": "the value printed next to 'Lot number/Code number/Batch number:'"
+  },
+  "field_checks": [
+    {
+      "field": "ExporterName",
+      "name": "Exporter name",
+      "expected_pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD"
+    },
+    {
+      "field": "ExporterAddress",
+      "name": "Exporter address",
+      "expected_pattern": "26\\s+BELLA\\s+ROSA\\s+STREET[\\s\\S]{0,30}BELLVILLE[\\s\\S]{0,30}(SOUTH\\s+AFRICA[\\s\\S]{0,10}7530|7530[\\s\\S]{0,10}SOUTH\\s+AFRICA)"
+    },
+    {
+      "field": "PackerName",
+      "name": "Packer name",
+      "expected_pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD"
+    },
+    {
+      "field": "PackerAddress",
+      "name": "Packer address",
+      "expected_pattern": "26\\s+BELLA\\s+ROSA\\s+STREET[\\s\\S]{0,30}BELLVILLE[\\s\\S]{0,30}(SOUTH\\s+AFRICA[\\s\\S]{0,10}7530|7530[\\s\\S]{0,10}SOUTH\\s+AFRICA)"
+    },
+    {
+      "field": "PackingDate",
+      "name": "Packing date format",
+      "expected_pattern": "^(0?[1-9]|[12]\\d|3[01])-(0?[1-9]|1[0-2])-\\d{4}$"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number printed"
+    }
+  ],
+  "week_day_code_checks": [
+    {
+      "name": "Lot number week/day validation",
+      "field": "LotNumber",
+      "length": 4,
+      "week_digit_indices": [0, 1],
+      "day_digit_indices": [2, 3]
+    }
+  ],
+  "logo_checks": [
+    {
+      "name": "100% Vegetarian logo",
+      "description": "the green square outline logo containing a solid green dot, indicating '100% Vegetarian'",
+      "require_color": true
+    },
+    {
+      "name": "FSSAI logo",
+      "description": "the 'fssai' logo (stylised text with a leaf) next to 'Food Safety and Standards Authority of India'",
+      "require_color": false
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "Importer name/address valid",
+      "table": "whatsapp-india-addresses",
+      "scan_match": {
+        "match_fields": [
+          {"source": "field:ImporterName", "attribute": "ImporterName", "fuzzy_min_score": 0.85},
+          {"source": "field:ImporterAddress", "attribute": "AddressLines", "fuzzy_min_score": 0.6}
+        ]
+      },
+      "store_as": "importer"
+    },
+    {
+      "name": "FSSAI License valid for address",
+      "table": "whatsapp-india-addresses",
+      "key": {
+        "Code": "result:importer.Code"
+      },
+      "compare_attribute": "FSSAI",
+      "compare_zone": "FSSAILicense"
+    }
+  ]
+}

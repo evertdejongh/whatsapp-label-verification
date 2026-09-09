@@ -11,17 +11,17 @@
     {
       "field": "GTIN",
       "name": "GTIN",
-      "expected_pattern": "^(\\(\\d{2}\\)\\s*)?4311"
+      "expected_pattern": "^(\\(\\d{2}\\)\\s*)?\\d{13}$"
     },
     {
       "field": "Pack",
       "name": "Allowed Pack code",
-      "expected_pattern": "^A04I$"
+      "expected_pattern": "^A05D$"
     },
     {
       "field": "InventoryCode",
       "name": "Allowed Inventory code",
-      "expected_pattern": "^CE$"
+      "expected_pattern": "^EM$"
     },
     {
       "field": "BerrySize",

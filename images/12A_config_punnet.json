@@ -1,0 +1,26 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "PUC": null,
+    "GGN": "the 13-digit GGN number printed on the label",
+    "GLN": "the 13-digit GLN number printed on the label"
+  },
+  "field_checks": [
+    {
+      "field": "GLN",
+      "name": "GLN",
+      "expected_pattern": "^6009644340002$"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    }
+  ]
+}

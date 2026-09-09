@@ -5,13 +5,19 @@
     "Pack": null,
     "InventoryCode": null,
     "Brand": "the value printed next to the 'Brand/Mark' heading",
-    "BerrySize": "the value printed next to the 'Berry Size' heading (e.g. 'Regular', 'L', 'XL', 'XXL')"
+    "BerrySize": "the value printed next to the 'Berry Size' heading (e.g. 'Regular', 'L', 'XL', 'XXL')",
+    "Variety": "the value printed next to the 'Variety/Sorte' heading"
   },
   "field_checks": [
     {
       "field": "GTIN",
       "name": "GTIN",
       "expected_pattern": "^(\\(\\d{2}\\)\\s*)?4311"
+    },
+    {
+      "field": "Variety",
+      "name": "Allowed Variety",
+      "expected_pattern": "(CRIMSON\\s+SEEDLESS|SHEEGENE\\s*20\\s*\\(\\s*ALLISON.{0,3}\\)|SHEEGENE\\s*13\\s*\\(\\s*TIMCO.{0,3}\\))"
     },
     {
       "field": "Pack",
@@ -21,12 +27,12 @@
     {
       "field": "InventoryCode",
       "name": "Allowed Inventory code",
-      "expected_pattern": "^CE$"
+      "expected_pattern": "^NC$"
     },
     {
       "field": "BerrySize",
       "name": "Allowed Berry Size",
-      "expected_pattern": "^(Regular|L|XL)$"
+      "expected_pattern": "^(L|XL)$"
     },
     {
       "field": "Brand",

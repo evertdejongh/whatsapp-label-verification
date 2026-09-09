@@ -32,6 +32,13 @@ REFERENCE_MATCH_THRESHOLD = 0.6
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
+# Known secondary label types a spec can opt into (e.g. a punnet/retail-pack
+# label printed alongside the carton label for the same shipment). A spec
+# opts in purely by uploading specs/{spec_code}_config_{suffix}.json and
+# specs/{spec_code}_label_{suffix}.png -- a spec with neither file behaves
+# exactly as before.
+LABEL_VARIANT_SUFFIXES = ["punnet", "punnet_mix", "2", "3", "4", "5", "pallet"]
+
 ssm = boto3.client('ssm', region_name=AWS_REGION)
 s3_client = boto3.client('s3', region_name=AWS_REGION)
 rekognition = boto3.client('rekognition', region_name=AWS_REGION)
@@ -577,7 +584,7 @@ def _expand_box(box, pad):
     return {"Left": left, "Top": top, "Width": right - left, "Height": bottom - top}
 
 
-def align_zone_locally(matcher, box, zone_name="", upscale=2):
+def align_zone_locally(matcher, box, zone_name="", upscale=2, use_vision_llm=False):
     """
     Returns a list of (crop_bytes, crop_box) candidates for this zone, most
     trustworthy first, so the caller can fall through to the next one if
@@ -678,7 +685,17 @@ def align_zone_locally(matcher, box, zone_name="", upscale=2):
     # warp for a photo that isn't drastically tilted to begin with. The
     # caller tries candidates in order and stops at the first that yields
     # any detected text.
-    if not fit_source.startswith("local"):
+    #
+    # Vision-LLM zones get this raw candidate even when the local fit *is*
+    # trusted: a local homography can clear the inlier-count bar yet still
+    # introduce visible skew/rotation into the crop (small angular errors in
+    # a handful of matched points translate into a noticeably tilted warp),
+    # and dense multi-language transcription is far more sensitive to that
+    # skew than Rekognition/Textract's line detection is -- a tilted crop
+    # measurably undercounts translations even though every entry is still
+    # present in it. The already rotation-corrected extraction is usually
+    # cleaner for this than a re-warped crop, so it's worth trying too.
+    if not fit_source.startswith("local") or use_vision_llm:
         raw_crop = crop_zone_png(user_img, crop_box, upscale)
         if raw_crop:
             candidates.append((raw_crop, crop_box))
@@ -709,6 +726,93 @@ def split_zone_tokens(lines):
     """
     text = normalize_zone_text(lines)
     return [t.strip() for t in ZONE_TOKEN_SPLIT_PATTERN.split(text) if t.strip()]
+
+
+def content_matches(expected_value, actual_text, fuzzy_threshold=None):
+    """
+    Compares a canonical reference value against extracted/zone text. A
+    short exact code (GGN, LidlProductNumber) is checked by substring --
+    fine even against text that's picked up extra neighboring content,
+    since the code either appears verbatim or it doesn't. A long free-text
+    block (23 language translations) needs fuzzy_threshold instead: the
+    source text can carry bleed-over as a trailing suffix, which dilutes a
+    whole-string similarity ratio even when the real content is a perfect
+    match, so the ratio is computed only against the correspondingly-sized
+    leading portion. And unlike a short code, even a highly-accurate vision
+    LLM occasionally drops a diacritic on one word in a long block -- real
+    content, not a defect -- so this needs a similarity threshold rather
+    than exact/substring equality.
+    """
+    if not expected_value:
+        return True
+    if fuzzy_threshold:
+        comparison_text = actual_text[:len(expected_value)]
+        similarity = difflib.SequenceMatcher(None, expected_value, comparison_text).ratio()
+        return similarity >= fuzzy_threshold
+    return expected_value in actual_text
+
+
+def content_matches_with_retry(expected_value, fuzzy_threshold, get_actual_text, refresh):
+    """
+    A vision-LLM transcription of a long, dense multi-script block (e.g. a
+    23-language translation list) has enough call-to-call variance that an
+    otherwise-correct label can occasionally dip just under a fuzzy
+    threshold on a single unlucky call -- confirmed directly: re-running
+    extraction on the same photo that failed live scored 0.96-0.998 on the
+    next four attempts. Only worth retrying when fuzzy_threshold is actually
+    in play: an exact/substring check failing means the content is
+    genuinely wrong, not noisy, and retrying would just mask a real defect.
+    get_actual_text/refresh are callables so this can serve both a
+    text_blocks-sourced comparison and an extracted_fields-sourced one.
+    """
+    actual_text = get_actual_text()
+    if content_matches(expected_value, actual_text, fuzzy_threshold):
+        return True, actual_text
+    if not fuzzy_threshold:
+        return False, actual_text
+    refresh()
+    actual_text = get_actual_text()
+    return content_matches(expected_value, actual_text, fuzzy_threshold), actual_text
+
+
+# Rule 9's Size Prompt: the heading text that must precede the size value,
+# fixed per Commodity Code -- a stable, universal Dole business rule, not
+# per-shipment data, so it's kept as code rather than table-driven per the
+# 2026-09-03 decision. Commodity codes not covered by name fall to "Size:".
+SIZE_PROMPT_BY_COMMODITY = {
+    "OR": "Size Ref/Size:", "GF": "Size Ref/Size:", "LE": "Size Ref/Size:",
+    "SC": "Size Ref:",
+    "GR": "Berry Size:",
+    "PL": "Size/Diameter:",
+    "NE": "Size/Count/Diameter:", "PE": "Size/Count/Diameter:",
+    "AC": "Size/Diameter:",
+    "BB": "Size:",
+    "AV": "Size/Mass Range:",
+}
+
+
+def expected_size_prompt(commodity):
+    return SIZE_PROMPT_BY_COMMODITY.get((commodity or "").strip().upper(), "Size:")
+
+
+def get_compare_text(source_name, zone_content, extracted_fields, text_blocks):
+    """
+    Resolves a lookup_rules "compare_zone" name against whichever source
+    actually has it: a legacy pixel-zone crop (zone_content, a list of OCR
+    lines -- still how 8B and 9A's remaining zone-based checks work), a
+    layout-agnostic extracted field (a single value), or an extracted
+    free-text block (a single verbatim string). This is what lets the same
+    lookup_rules config work unchanged whether "Grower GGN" or "Variety
+    Group languages" comes from a calibrated box or from Gemini finding it
+    by content on a label with a different physical layout.
+    """
+    if source_name in zone_content:
+        return normalize_zone_text(zone_content[source_name])
+    if source_name in text_blocks:
+        return normalize_zone_text([str(text_blocks[source_name])])
+    if source_name in extracted_fields:
+        return normalize_zone_text([str(extracted_fields[source_name])])
+    return ""
 
 
 def zone_matches_reference(ref_img, box, user_lines):
@@ -801,36 +905,126 @@ VISION_ZONE_PROMPT = (
 )
 
 
-def call_gemini_vision(image_bytes, prompt, api_key):
-    b64_image = base64.b64encode(image_bytes).decode('utf-8')
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": "image/png", "data": b64_image}}
-                ]
-            }
-        ],
-        "generationConfig": {"temperature": 0}
-    }
+def _call_gemini(payload, api_key):
     data = json.dumps(payload).encode('utf-8')
     url = GEMINI_API_URL.format(model=GEMINI_MODEL)
     headers = {
         "x-goog-api-key": api_key,
         "Content-Type": "application/json"
     }
-    req = urllib.request.Request(url, data=data, headers=headers, method='POST')
-    try:
-        with urllib.request.urlopen(req, timeout=45) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            return result['candidates'][0]['content']['parts'][0]['text']
-    except urllib.error.HTTPError as e:
-        logger.error(f"Gemini vision API error: Status {e.code} - {e.read().decode('utf-8')}")
+
+    # Google AI Studio's free tier has no latency SLA -- a timeout or a 5xx
+    # (e.g. 503 "model currently experiencing high demand") is usually
+    # transient server-side overload, not a real failure, so retry with a
+    # short backoff before giving up. Observed live: an immediate retry with
+    # no delay at all still hit 503 both times during a real overload spike,
+    # so a brief pause between attempts matters, not just the retry itself.
+    # A 4xx HTTPError means the API rejected the request itself (bad auth,
+    # bad payload) -- a retry can't fix that and would just double the wait
+    # for the same outcome, so those fail immediately, no backoff.
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=45) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                return result['candidates'][0]['content']['parts'][0]['text']
+        except urllib.error.HTTPError as e:
+            logger.error(f"Gemini vision API error: Status {e.code} - {e.read().decode('utf-8')}")
+            if e.code >= 500 and attempt < max_attempts - 1:
+                time.sleep(3)
+                continue
+            return None
+        except Exception as e:
+            logger.error(f"Gemini vision API call failed (attempt {attempt + 1}/{max_attempts}): {str(e)}")
+            if attempt == max_attempts - 1:
+                return None
+            time.sleep(3)
+
+
+def call_gemini_vision(image_bytes, prompt, api_key, mime_type='image/png'):
+    b64_image = base64.b64encode(image_bytes).decode('utf-8')
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": mime_type, "data": b64_image}}
+                ]
+            }
+        ],
+        "generationConfig": {"temperature": 0}
+    }
+    return _call_gemini(payload, api_key)
+
+
+def classify_label_variant(uploaded_bytes, reference_images, api_key):
+    """
+    Some spec families print two physically different labels for the same
+    shipment -- e.g. the carton label and a small punnet/retail-pack label
+    -- each needing its own validation rules. Rather than hand-write what
+    distinguishes them (which would need updating per spec family), show
+    Gemini the spec's own reference photos (the same ones already kept in
+    S3 for the /spec info command) side by side with the uploaded photo and
+    ask which one it resembles. reference_images maps a name (e.g.
+    "primary", "punnet") to that variant's reference photo bytes.
+    """
+    if not api_key or len(reference_images) < 2:
         return None
-    except Exception as e:
-        logger.error(f"Gemini vision API call failed: {str(e)}")
+
+    parts = [{"text": (
+        "Each reference image below shows a different physical type of "
+        "produce label, each preceded by a text line naming it. After all "
+        "references, one final image preceded by the line 'UPLOADED:' is "
+        "given. Decide which reference the UPLOADED image is the SAME "
+        "DESIGN as -- as if checking two photos are of the same printed "
+        "template, not just 'both produce labels' or 'both small retail "
+        "labels'. Compare concretely: background color and pattern, "
+        "whether a large brand logo/graphic is present versus a plain "
+        "text-only layout, overall color scheme, and layout density -- not "
+        "just coarse size/shape category. Two labels can both be small "
+        "individual punnet/retail-pack labels while being completely "
+        "different designs (e.g. one a colorful branded box graphic, the "
+        "other a plain white text-only layout) -- that is NOT a match. "
+        "Ignore the specific printed values (variety name, codes, "
+        "barcodes), which differ between any two real labels regardless of "
+        "design. If the UPLOADED image is not the same design as any "
+        "reference, do not force a match to whichever is merely the "
+        "closest of a bad set of options -- respond with exactly 'NONE'."
+    )}]
+    for name, img_bytes in reference_images.items():
+        parts.append({"text": f"Reference '{name}':"})
+        parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(img_bytes).decode('utf-8')}})
+    parts.append({"text": "UPLOADED:"})
+    parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(uploaded_bytes).decode('utf-8')}})
+    parts.append({"text": (
+        "Respond with ONLY the exact reference name (as given above, e.g. "
+        "'primary') that the UPLOADED image most closely matches, or "
+        "'NONE' if it doesn't clearly match any of them -- nothing else, "
+        "no commentary, no punctuation."
+    )})
+
+    payload = {"contents": [{"parts": parts}], "generationConfig": {"temperature": 0}}
+    response_text = _call_gemini(payload, api_key)
+    if not response_text:
         return None
+
+    cleaned = response_text.strip().strip('`').strip().lower()
+    if cleaned == "none":
+        return "NONE"
+    # Check for an exact match first, then substring matches -- and among
+    # those, the longest name, since a shorter variant name can be a
+    # substring of a longer one (e.g. "punnet" inside "punnet_mix"), which
+    # previously made a correct "punnet_mix" answer get misfiled as
+    # "punnet" purely because of dict iteration order.
+    for name in reference_images:
+        if name.lower() == cleaned:
+            return name
+    substring_matches = [name for name in reference_images if name.lower() in cleaned]
+    if substring_matches:
+        return max(substring_matches, key=len)
+    logger.info(f"Label variant classification returned unrecognized value: {response_text!r}")
+    return None
 
 
 def detect_zone_lines_vision_llm(crop_bytes, api_key):
@@ -861,6 +1055,184 @@ def detect_zone_lines_vision_llm(crop_bytes, api_key):
         return []
 
 
+def call_gemini_for_json(image_bytes, prompt, api_key):
+    """
+    Shared plumbing for extract_label_fields/extract_label_text_blocks: calls
+    Gemini, strips the markdown code-fence wrapping some responses add
+    despite being asked not to, and parses the result as a JSON object of
+    string values.
+    """
+    response_text = call_gemini_vision(image_bytes, prompt, api_key, mime_type='image/jpeg')
+    if not response_text:
+        return {}
+
+    cleaned = response_text.strip().strip('`')
+    if cleaned.lower().startswith('json'):
+        cleaned = cleaned[4:].strip()
+
+    parsed = json.loads(cleaned)
+    return {k: (v.strip() if isinstance(v, str) else v) for k, v in parsed.items()}
+
+
+EXTRACT_FIELDS_PROMPT_TEMPLATE = (
+    "This image is a produce pallet label. Find the printed value for each of "
+    "the following fields and transcribe it exactly as printed -- no "
+    "paraphrasing, no translation, no reformatting:\n{field_list}\n"
+    "If any part of a value is obscured, smudged, damaged, or otherwise not "
+    "clearly legible in the image, do NOT guess or infer what it probably "
+    "says based on similar codes or patterns you know of -- transcribe only "
+    "the characters you can actually see, using '?' for each character you "
+    "cannot make out (e.g. 'D75?0' if one digit is unreadable). Getting this "
+    "wrong by inventing a plausible-looking value is worse than admitting "
+    "uncertainty, since it would hide a real printing defect. "
+    "Respond with ONLY a JSON object mapping each field name (using exactly "
+    "the names given above) to its printed value as a string, nothing else "
+    "-- no commentary, no markdown fences. If a field is not present "
+    "anywhere on the label, map it to null."
+)
+
+
+def extract_label_fields(image_bytes, field_specs, api_key):
+    """
+    Asks Gemini to find and transcribe a set of named fields from the whole
+    label image in one call -- an alternative to calibrating a dedicated
+    pixel zone box for every new field that needs cross-table lookup, since
+    that doesn't scale to the growing list of reference-table checks. Same
+    transcribe-don't-restructure split as detect_zone_lines_vision_llm: the
+    model's only job is to find and copy each value, not interpret it.
+
+    field_specs maps each field name to an optional hint describing where/
+    what it is, or None when the field name alone already matches text
+    printed on the label closely enough (e.g. "PUC", "Variety" -- both are
+    printed as their own heading). A hint is needed for a value with no
+    literal on-label heading: e.g. IANNumber and LidlProductNumber are both
+    bare, similarly-shaped codes with nothing printed labeling them as such,
+    and without a distinguishing hint Gemini has been observed to swap the
+    two (put the IAN number under the LidlProductNumber key and vice versa).
+    """
+    try:
+        if not field_specs or not api_key:
+            return {}
+
+        field_list = "\n".join(
+            f'- "{name}"' + (f": {hint}" if hint else "")
+            for name, hint in field_specs.items()
+        )
+        prompt = EXTRACT_FIELDS_PROMPT_TEMPLATE.format(field_list=field_list)
+        return call_gemini_for_json(image_bytes, prompt, api_key)
+    except Exception as e:
+        logger.error(f"Vision LLM field extraction failed: {str(e)}")
+        return {}
+
+
+LOGO_CHECK_PROMPT_TEMPLATE = (
+    "This image is a produce pallet label. For each of the following named "
+    "logos/graphics, look at the label and determine two things: (1) is it "
+    "present anywhere on the label, and (2) is it printed in actual color "
+    "(multiple distinct hues, not just black, white, or grayscale/halftone) "
+    "-- a logo rendered only as black ink outlines/fill is NOT in color, "
+    "even if other parts of the label around it are colored.\n{logo_list}\n"
+    "Respond with ONLY a JSON object mapping each logo name (using exactly "
+    "the names given above) to an object with two boolean fields, "
+    "\"present\" and \"color\", nothing else -- no commentary, no markdown "
+    "fences. If a logo is not present anywhere on the label, still include "
+    "it with \"present\": false and \"color\": false."
+)
+
+
+def check_label_logos(image_bytes, logo_specs, api_key):
+    """
+    Asks Gemini a direct visual judgment about specific graphic elements
+    (logos) -- whether each is printed at all, and whether it's printed in
+    color versus black-and-white. Unlike extract_label_fields (transcribe
+    text verbatim, no interpretation), this is a genuinely visual judgment
+    call -- the same category of ask as classify_label_variant's design
+    comparison -- since there's no text to transcribe for "is this graphic
+    in color".
+    """
+    try:
+        if not logo_specs or not api_key:
+            return {}
+
+        logo_list = "\n".join(f'- "{name}": {desc}' for name, desc in logo_specs.items())
+        prompt = LOGO_CHECK_PROMPT_TEMPLATE.format(logo_list=logo_list)
+        return call_gemini_for_json(image_bytes, prompt, api_key)
+    except Exception as e:
+        logger.error(f"Vision LLM logo check failed: {str(e)}")
+        return {}
+
+
+TEXT_BLOCK_PROMPT_TEMPLATE = (
+    "This image is a produce pallet label. For each of the following named "
+    "blocks of text, find it on the label and transcribe it exactly as "
+    "printed, preserving every separator character (such as '/' or '-'), "
+    "punctuation, diacritics, and special characters precisely as shown -- "
+    "do not paraphrase, translate, summarize, or add/remove any separators. "
+    "If any part of a block is obscured, smudged, damaged, or otherwise not "
+    "clearly legible, do NOT guess what it probably says based on similar "
+    "text you know of -- transcribe only what you can actually see, using "
+    "'?' for each character you cannot make out. Inventing a plausible-"
+    "looking value is worse than admitting uncertainty, since it would hide "
+    "a real printing defect. "
+    "The blocks to find:\n{block_list}\n"
+    "Respond with ONLY a JSON object mapping each block name (using exactly "
+    "the names given below) to its transcribed text as a string, nothing "
+    "else -- no commentary, no markdown fences. If a block is not present "
+    "anywhere on the label, map it to null."
+)
+
+
+def extract_label_text_blocks(image_bytes, block_prompts, api_key):
+    """
+    Like extract_label_fields(), but for dense free-text blocks (e.g. the
+    list of ~23 language translations of the product name) rather than
+    short discrete values -- found by a semantic description of what to
+    look for (block_prompts maps a block name to that description) instead
+    of a pixel zone box, and transcribed verbatim so the result can still be
+    compared against exact reference content afterward. This is what lets a
+    label whose physical layout doesn't match any calibrated zone still get
+    this block validated: Gemini locates it by content, not position.
+    """
+    try:
+        if not block_prompts or not api_key:
+            return {}
+
+        block_list = "\n".join(f'- "{name}": {desc}' for name, desc in block_prompts.items())
+        prompt = TEXT_BLOCK_PROMPT_TEMPLATE.format(block_list=block_list)
+        return call_gemini_for_json(image_bytes, prompt, api_key)
+    except Exception as e:
+        logger.error(f"Vision LLM text block extraction failed: {str(e)}")
+        return {}
+
+
+def resolve_lookup_value(value_spec, extracted_fields, config_data, rule_results):
+    """
+    Resolves one component of a lookup_rules "key" dict to an actual value.
+    A value_spec is a small prefixed reference rather than a literal, so a
+    rule's key can be built from whatever combination of sources a real
+    multi-table chain needs:
+      "field:X"  -> extracted_fields[X] (a value the vision LLM read off the
+                    label this request, e.g. "field:Variety")
+      "config:X" -> config_data[X] (a fixed per-spec value, e.g.
+                    "config:commodity" for a single-commodity spec)
+      "result:R.A" -> rule_results[R][A], the attribute A of whatever row an
+                    earlier rule (with matching "store_as": "R") found --
+                    this is what makes chained lookups possible (e.g. look up
+                    Variety to find its Commodity, then use that Commodity to
+                    look up the Commodity table).
+    Anything without a recognized prefix is treated as a literal value.
+    """
+    if value_spec.startswith("field:"):
+        return extracted_fields.get(value_spec[len("field:"):])
+    if value_spec.startswith("config:"):
+        return config_data.get(value_spec[len("config:"):])
+    if value_spec.startswith("result:"):
+        rule_name, _, attribute = value_spec[len("result:"):].partition(".")
+        item = rule_results.get(rule_name)
+        return item.get(attribute) if item else None
+    return value_spec
+
+
 def evaluate_zone(user_lines, expected_pattern, compare_to_reference, expected_token_count, token_count_tolerance, ref_img, box):
     """
     Checks OCR'd lines for a zone against its configured requirements.
@@ -881,14 +1253,99 @@ def evaluate_zone(user_lines, expected_pattern, compare_to_reference, expected_t
 
 
 def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
-    ref_label_key = f"specs/{spec_code}_label.png"
-    config_key = f"specs/{spec_code}_config.json"
+    # Some specs print two physically different labels for the same
+    # shipment (e.g. a carton label and a punnet/retail-pack label). A spec
+    # opts into this by having a specs/{spec_code}_config_{suffix}.json
+    # alongside a specs/{spec_code}_label_{suffix}.png reference photo for
+    # one or more of LABEL_VARIANT_SUFFIXES; a spec with neither behaves
+    # exactly as before, at the cost of one cheap head_object check per
+    # known suffix.
+    variant_suffix = None
+    candidate_suffixes = []
+    for suffix in LABEL_VARIANT_SUFFIXES:
+        try:
+            s3_client.head_object(Bucket=BUCKET_NAME, Key=f"specs/{spec_code}_config_{suffix}.json")
+            candidate_suffixes.append(suffix)
+        except ClientError:
+            continue
 
+    if candidate_suffixes:
+        reference_images = {}
+        try:
+            primary_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=f"specs/{spec_code}_label.png")
+            reference_images["primary"] = primary_obj['Body'].read()
+        except ClientError:
+            pass
+        for suffix in candidate_suffixes:
+            try:
+                variant_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=f"specs/{spec_code}_label_{suffix}.png")
+                reference_images[suffix] = variant_obj['Body'].read()
+            except ClientError:
+                continue
+
+        if len(reference_images) > 1:
+            classify_api_key = get_ssm_param('/whatsapp/gemini_api_key')
+            chosen = classify_label_variant(uploaded_bytes, reference_images, classify_api_key)
+            logger.info(f"Spec '{spec_code}': label variant classification -> {chosen or 'primary'}")
+
+            # A photo that doesn't clearly match ANY of this spec's own
+            # reference photos (carton or punnet) is a strong signal the
+            # wrong spec code was used -- e.g. a genuinely different
+            # customer's label submitted under this spec's code. Content
+            # checks alone can't catch this: 9B's and 9C's punnet rules
+            # are both generic (GGN/PUC/Variety/Lot, backed by Dole-global
+            # reference tables), so a real product's data from the WRONG
+            # spec's label satisfies the RIGHT spec's rules just fine --
+            # confirmed live (2026-09-07): a 9B photo sent as "9C" passed
+            # 9C's punnet checks outright, since nothing checked whether
+            # the photo actually looked like a 9C label at all. Failing
+            # fast here, before even loading a config, closes that gap.
+            if chosen == "NONE":
+                return "ERROR", (
+                    f"❌ *Layout Verification FAILED*\n\n"
+                    f"• Spec Reference: *{spec_code}*\n"
+                    f"• Reason: This photo doesn't match either the carton or "
+                    f"punnet label design on file for spec *{spec_code}*. "
+                    f"Please check you used the correct spec code."
+                ), {}
+
+            if chosen and chosen != "primary":
+                variant_suffix = chosen
+
+    config_suffix = f"_{variant_suffix}" if variant_suffix else ""
+    config_key = f"specs/{spec_code}_config{config_suffix}.json"
+
+    config_data = {}
+    config_found = False
     try:
-        ref_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=ref_label_key)
-        ref_image_bytes = ref_obj['Body'].read()
+        config_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=config_key)
+        config_data = json.loads(config_obj['Body'].read().decode('utf-8'))
+        config_found = True
     except ClientError:
-        return "ERROR", f"❌ *Layout Verification FAILED*\n\n• Spec Reference: *{spec_code}*\n• Reason: Reference layout not found in S3.", {}
+        logger.info(f"No custom config found for {spec_code}.")
+
+    if not config_found:
+        # No config at all (as opposed to a config that's just sparse) used
+        # to silently fall through to a single presence-only "Full Label"
+        # check and report a real PASS -- meaning any spec with a catalog
+        # entry/reference image but no actual validation rules yet looked
+        # exactly like a fully-validated one. Report plainly instead of
+        # letting that trivial check masquerade as a real result.
+        return "ERROR", (
+            f"⚠️ *No Validation Rules Configured*\n\n"
+            f"• Spec Reference: *{spec_code}*\n"
+            f"• Reason: This spec code has no label validation rules set up yet -- "
+            f"nothing was actually checked. Contact your administrator to configure it."
+        ), {}
+
+    # A "layout_agnostic" spec skips the reference-photo/ORB-alignment
+    # system entirely -- that system assumes the uploaded photo is (once
+    # rotated/cropped) geometrically close to the one reference photo on
+    # file, which by design can't hold for a label a different 3rd-party
+    # printer laid out differently. Such a spec is checked purely on
+    # extracted field/text-block content instead, found by Gemini wherever
+    # it actually sits rather than by pixel position.
+    layout_agnostic = config_data.get('layout_agnostic', False)
 
     extracted_bytes = extract_label_automatically(uploaded_bytes)
 
@@ -903,30 +1360,53 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
         except Exception as ex:
             logger.error(f"Failed to save debug extracted image: {str(ex)}")
 
-    matcher = build_orb_matcher(ref_image_bytes, extracted_bytes)
-    if matcher is None:
-        return "ERROR", f"❌ *Layout Verification FAILED*\n\n• Spec Reference: *{spec_code}*\n• Reason: Could not process uploaded image.", {}
+    matcher = None
+    target_regions = []
+    if not layout_agnostic:
+        ref_label_key = f"specs/{spec_code}_label{config_suffix}.png"
+        try:
+            ref_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=ref_label_key)
+            ref_image_bytes = ref_obj['Body'].read()
+        except ClientError:
+            return "ERROR", f"❌ *Layout Verification FAILED*\n\n• Spec Reference: *{spec_code}*\n• Reason: Reference layout not found in S3.", {}
 
-    target_regions = [
-        {"name": "Full Label", "box": {"Left": 0.0, "Top": 0.0, "Width": 1.0, "Height": 1.0}}
-    ]
+        matcher = build_orb_matcher(ref_image_bytes, extracted_bytes)
+        if matcher is None:
+            return "ERROR", f"❌ *Layout Verification FAILED*\n\n• Spec Reference: *{spec_code}*\n• Reason: Could not process uploaded image.", {}
 
-    try:
-        config_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=config_key)
-        config_data = json.loads(config_obj['Body'].read().decode('utf-8'))
-        if 'target_regions' in config_data:
-            target_regions = config_data['target_regions']
-    except ClientError:
-        logger.info(f"No custom config found for {spec_code}, falling back to full-image scan.")
+        target_regions = config_data.get('target_regions', [
+            {"name": "Full Label", "box": {"Left": 0.0, "Top": 0.0, "Width": 1.0, "Height": 1.0}}
+        ])
+
+    full_label_checks = config_data.get('full_label_checks', [])
+    extract_field_specs = config_data.get('extract_fields', {})
+    if isinstance(extract_field_specs, list):
+        # Older configs list bare field names with no hint; normalize to the
+        # {name: hint} shape extract_label_fields() expects.
+        extract_field_specs = {name: None for name in extract_field_specs}
+    lookup_rules = config_data.get('lookup_rules', [])
+    field_checks = config_data.get('field_checks', [])
+    text_block_prompts = config_data.get('text_blocks', {})
+    text_block_checks = config_data.get('text_block_checks', [])
+    size_prompt_checks = config_data.get('size_prompt_checks', [])
+    color_tag_checks = config_data.get('color_tag_checks', [])
+    allowed_variety_group_checks = config_data.get('allowed_variety_group_checks', [])
+    date_comparison_checks = config_data.get('date_comparison_checks', [])
+    arithmetic_checks = config_data.get('arithmetic_checks', [])
+    field_equality_checks = config_data.get('field_equality_checks', [])
+    week_day_code_checks = config_data.get('week_day_code_checks', [])
+    logo_checks = config_data.get('logo_checks', [])
+    warning_checks = config_data.get('warning_checks', [])
 
     vision_llm_api_key = None
-    if any(zone.get("use_vision_llm") for zone in target_regions):
+    if any(zone.get("use_vision_llm") for zone in target_regions) or extract_field_specs or text_block_prompts or logo_checks:
         vision_llm_api_key = get_ssm_param('/whatsapp/gemini_api_key')
 
     try:
         failed_zones = []
         passed_zones = 0
         passed_zone_names = []
+        warnings = []
         zone_content = {}
 
         for zone in target_regions:
@@ -939,7 +1419,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             use_textract = zone.get("use_textract", False)
             use_vision_llm = zone.get("use_vision_llm", False)
 
-            crop_candidates = align_zone_locally(matcher, box, zone_name=zone_name)
+            crop_candidates = align_zone_locally(matcher, box, zone_name=zone_name, use_vision_llm=use_vision_llm)
 
             # Try each candidate crop in order, but only stop at one that
             # actually satisfies the zone's requirements -- not merely one
@@ -998,15 +1478,582 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 passed_zones += 1
                 passed_zone_names.append(zone_name)
 
-        total_regions = len(target_regions)
+        full_label_text = ""
+        if full_label_checks or size_prompt_checks:
+            # Rekognition's detect_text on a full, dense multi-section label only
+            # picks up the most prominent text (the two 23-language blocks) and
+            # silently drops smaller print (Supplier/PHC/footer/Importer lines) --
+            # the same dense-document limitation that required switching the
+            # language zones to Textract. Use Textract here too so these
+            # full-label checks see the whole label, not just its biggest text.
+            full_label_lines = detect_zone_lines_textract(extracted_bytes)
+            full_label_text = " ".join(full_label_lines)
+
+        if full_label_checks:
+            for check in full_label_checks:
+                check_name = check.get("name", "Unnamed Check")
+                pattern = check.get("pattern")
+                if pattern and not re.search(pattern, full_label_text, re.IGNORECASE):
+                    failed_zones.append(f"{check_name} (Missing required text)")
+                else:
+                    passed_zones += 1
+                    passed_zone_names.append(check_name)
+
+        extracted_fields = {}
+        if extract_field_specs:
+            extracted_fields = extract_label_fields(extracted_bytes, extract_field_specs, vision_llm_api_key)
+            logger.info(f"Extracted label fields: {extracted_fields}")
+
+        # Layout-agnostic replacement for what evaluate_zone's
+        # expected_pattern did against a zone crop -- same regex check, but
+        # against a value Gemini found by name rather than by pixel box.
+        for check in field_checks:
+            field_name = check.get("field")
+            check_name = check.get("name", field_name)
+            pattern = check.get("expected_pattern")
+            value = extracted_fields.get(field_name)
+
+            if not value:
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+            elif pattern and not re.search(pattern, str(value), re.IGNORECASE):
+                failed_zones.append(f"{check_name} (Content Mismatch)")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # Soft checks: worth flagging for a human to double-check, but never
+        # enough on their own to fail the whole verification -- e.g. a
+        # second GGN printed in the Packhouse block that's expected to match
+        # the Grower GGN but isn't itself a hard requirement either way.
+        # Excluded from total_regions/passed_zones entirely, so they can
+        # never affect the overall PASS/FAIL outcome.
+        for check in warning_checks:
+            check_name = check.get("name", "Warning")
+            field_name = check.get("field")
+            compare_field = check.get("compare_field")
+            value = extracted_fields.get(field_name)
+            compare_value = extracted_fields.get(compare_field)
+
+            if not value:
+                warnings.append(f"{check_name}: could not find {field_name} on the label to check")
+            elif compare_value and normalize_zone_text([str(value)]) != normalize_zone_text([str(compare_value)]):
+                warnings.append(
+                    f"{check_name}: {field_name} ('{value}') differs from {compare_field} ('{compare_value}') -- please double-check"
+                )
+
+        text_blocks = {}
+        if text_block_prompts:
+            text_blocks = extract_label_text_blocks(extracted_bytes, text_block_prompts, vision_llm_api_key)
+            logger.info(f"Extracted text blocks: { {k: len(v) if isinstance(v, str) else v for k, v in text_blocks.items()} }")
+
+        # Layout-agnostic replacement for expected_token_count -- same
+        # split_zone_tokens()-based counting, but against a block Gemini
+        # located by content instead of a zone crop, and always exact (no
+        # tolerance): a genuinely correct label was proven able to hit an
+        # exact count once the underlying crop-skew bug was fixed, so an
+        # undercount here means a real missing translation, not noise.
+        for check in text_block_checks:
+            block_name = check.get("block")
+            check_name = check.get("name", block_name)
+            expected_token_count = check.get("expected_token_count")
+            expected_content = check.get("expected_content")
+            fuzzy_threshold = check.get("fuzzy_threshold")
+            block_text = text_blocks.get(block_name)
+            block_tokens = split_zone_tokens([block_text]) if block_text else []
+
+            def get_block_actual_text(name=block_name):
+                bt = text_blocks.get(name)
+                return normalize_zone_text([bt]) if bt else ""
+
+            def refresh_text_blocks():
+                text_blocks.update(extract_label_text_blocks(extracted_bytes, text_block_prompts, vision_llm_api_key))
+
+            if not block_text:
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+            elif expected_token_count and len(block_tokens) < expected_token_count:
+                failed_zones.append(
+                    f"{check_name} (Expected {expected_token_count} translations, found {len(block_tokens)})"
+                )
+            elif expected_content:
+                matched, _ = content_matches_with_retry(
+                    expected_content.strip().upper(), fuzzy_threshold, get_block_actual_text, refresh_text_blocks
+                )
+                if matched:
+                    passed_zones += 1
+                    passed_zone_names.append(check_name)
+                else:
+                    failed_zones.append(f"{check_name} (Content Mismatch)")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        rule_results = {}
+        for rule in lookup_rules:
+            rule_name = rule.get("name", "Unnamed Rule")
+            key_spec = rule.get("key", {})
+            compare_attribute = rule.get("compare_attribute")
+            compare_zone = rule.get("compare_zone")
+
+            query_mode = rule.get("query", False)
+            disambiguate_by = rule.get("disambiguate_by")
+            scan_match = rule.get("scan_match")
+
+            items = []
+            key = {}
+            last_unresolved_attr = None
+            lookup_failed = False
+
+            if scan_match:
+                # No printed code identifies which reference row applies (e.g.
+                # 17C's Importer Name/Address has no on-label code to key off
+                # of) -- instead of an exact-key GetItem, scan the whole
+                # table (small, tens of rows) and fuzzy-match the printed
+                # text against every candidate row. match_fields lists one or
+                # more independent {source, attribute, fuzzy_min_score}
+                # comparisons (e.g. Name vs Address1, Address vs
+                # AddressLines) -- a candidate only qualifies if it clears
+                # EVERY field's own threshold. This matters because a single
+                # combined-text score would let a long, genuinely-correct
+                # address paper over a short, wrong/corrupted name (most of
+                # the text still matches, diluting the one part that
+                # shouldn't).
+                match_fields = scan_match.get("match_fields", [])
+                resolved_fields = []
+                unresolved = None
+                for mf in match_fields:
+                    value = resolve_lookup_value(mf.get("source"), extracted_fields, config_data, rule_results)
+                    if not value:
+                        unresolved = mf.get("source")
+                        break
+                    resolved_fields.append({
+                        "attribute": mf.get("attribute"),
+                        "min_score": mf.get("fuzzy_min_score", 0.6),
+                        "value_norm": normalize_zone_text([str(value)]).upper(),
+                    })
+
+                if unresolved:
+                    last_unresolved_attr = unresolved
+                else:
+                    try:
+                        table = dynamodb.Table(rule.get("table"))
+                        candidates = table.scan().get('Items', [])
+                    except Exception as e:
+                        logger.error(f"Lookup rule '{rule_name}' table scan failed: {str(e)}")
+                        lookup_failed = True
+                        candidates = []
+
+                    best_item, best_avg_score, best_scores = None, -1, None
+                    for candidate in candidates:
+                        scores = []
+                        qualifies = True
+                        for rf in resolved_fields:
+                            candidate_text = str(candidate.get(rf["attribute"], "")).strip().upper()
+                            score = difflib.SequenceMatcher(None, candidate_text, rf["value_norm"]).ratio() if candidate_text else 0.0
+                            scores.append(score)
+                            if score < rf["min_score"]:
+                                qualifies = False
+                        if not qualifies:
+                            continue
+                        avg_score = sum(scores) / len(scores)
+                        if avg_score > best_avg_score:
+                            best_item, best_avg_score, best_scores = candidate, avg_score, scores
+
+                    if best_item is not None:
+                        items = [best_item]
+                        key = {"scan_match": [rf["value_norm"] for rf in resolved_fields]}
+                        logger.info(f"Lookup rule '{rule_name}' scan_match -> {best_item} (scores={best_scores})")
+                    elif not lookup_failed:
+                        failed_zones.append(f"{rule_name} (No matching reference entry found)")
+                        continue
+            else:
+                # Most rules have just one key shape, but a table can have an
+                # exception needing an extra key attribute -- e.g. the REWE
+                # combinations table is keyed on Pack+VarietyGroup for almost
+                # every row, except the one VarietyGroup+InvCode='RH' exception,
+                # which needs Pack+VarietyGroup+InvCode. Rather than teach the
+                # engine REWE-specific bucketing logic, a rule can declare a
+                # "fallback_key" (same shape as "key") tried only if the primary
+                # key's exact match isn't found -- the reference table itself
+                # encodes which rows need the more specific key.
+                key_specs_to_try = [ks for ks in [key_spec, rule.get("fallback_key")] if ks]
+
+                for candidate_key_spec in key_specs_to_try:
+                    candidate_key = {}
+                    unresolved_attr = None
+                    for key_attribute, value_spec in candidate_key_spec.items():
+                        # Most keys resolve from a single source, but a table keyed
+                        # on more than 2 real-world attributes (DynamoDB only allows
+                        # a hash+range pair) needs several sources concatenated into
+                        # one stored key -- e.g. IAN Numbers' Commodity+VarietyGroup+
+                        # Pack+InventoryCode -- so a value_spec can be a list of
+                        # sources to join with "#", the same separator used when the
+                        # table was built, instead of just one.
+                        part_specs = value_spec if isinstance(value_spec, list) else [value_spec]
+                        parts = []
+                        for part_spec in part_specs:
+                            part_value = resolve_lookup_value(part_spec, extracted_fields, config_data, rule_results)
+                            if not part_value:
+                                parts = None
+                                break
+                            # Values transcribed off the label can carry line-wrap
+                            # newlines where the reference table has a plain space
+                            # (e.g. a Variety name printed across two lines) --
+                            # collapse all whitespace the same way zone text already
+                            # is, instead of just trimming the ends, or an
+                            # exact-match key lookup fails on a label that's
+                            # otherwise completely correct.
+                            parts.append(normalize_zone_text([str(part_value)]))
+
+                        if parts is None:
+                            unresolved_attr = key_attribute
+                            break
+                        candidate_key[key_attribute] = "#".join(parts)
+
+                    if unresolved_attr:
+                        last_unresolved_attr = unresolved_attr
+                        continue
+
+                    key = candidate_key
+                    try:
+                        table = dynamodb.Table(rule.get("table"))
+                        if query_mode:
+                            # `key` is expected to hold just the partition key here --
+                            # e.g. Variety table's VarietyName alone, letting every
+                            # commodity sharing that name come back to be
+                            # disambiguated below, rather than requiring the caller
+                            # to already know which commodity applies (the whole
+                            # point: nothing upstream has to hardcode a per-spec
+                            # commodity just to look up a Variety).
+                            partition_attr, partition_value = next(iter(key.items()))
+                            found_items = table.query(KeyConditionExpression=Key(partition_attr).eq(partition_value)).get('Items', [])
+                        else:
+                            single_item = table.get_item(Key=key).get('Item')
+                            found_items = [single_item] if single_item else []
+                    except Exception as e:
+                        logger.error(f"Lookup rule '{rule_name}' table query failed: {str(e)}")
+                        lookup_failed = True
+                        break
+
+                    if found_items:
+                        items = found_items
+                        break
+
+            if lookup_failed:
+                failed_zones.append(f"{rule_name} (Lookup failed)")
+                continue
+
+            if not items:
+                if not key:
+                    failed_zones.append(f"{rule_name} (Could not resolve {last_unresolved_attr} for lookup)")
+                else:
+                    failed_zones.append(f"{rule_name} ({key} not found in reference table)")
+                continue
+
+            if len(items) == 1:
+                item = items[0]
+            elif disambiguate_by:
+                # A handful of Variety names span more than one commodity
+                # (e.g. "EUREKA" is both a Blueberry and a Lemon variety) --
+                # pick whichever candidate's own reference text (e.g. its
+                # Variety Group's canonical language block) best matches
+                # what's actually printed on this label, instead of
+                # requiring the caller to pre-select a commodity.
+                candidate_attr = disambiguate_by.get("candidate_attribute")
+                ref_table = dynamodb.Table(disambiguate_by.get("reference_table"))
+                ref_key_attr = disambiguate_by.get("reference_key_attribute")
+                ref_compare_attr = disambiguate_by.get("reference_compare_attribute")
+                actual_text_for_dis = get_compare_text(
+                    disambiguate_by.get("compare_zone"), zone_content, extracted_fields, text_blocks
+                )
+
+                item, best_score = None, -1
+                for candidate in items:
+                    candidate_key_value = candidate.get(candidate_attr)
+                    if not candidate_key_value:
+                        continue
+                    ref_item = ref_table.get_item(Key={ref_key_attr: candidate_key_value}).get('Item')
+                    ref_text = str(ref_item.get(ref_compare_attr, "")).strip().upper() if ref_item else ""
+                    if not ref_text:
+                        continue
+                    score = difflib.SequenceMatcher(None, ref_text, actual_text_for_dis[:len(ref_text)]).ratio()
+                    if score > best_score:
+                        item, best_score = candidate, score
+
+                if item is None:
+                    failed_zones.append(f"{rule_name} ({len(items)} matches for {key}, could not disambiguate)")
+                    continue
+                logger.info(f"Lookup rule '{rule_name}' disambiguated {len(items)} candidates -> {item} (score={best_score:.3f})")
+            else:
+                failed_zones.append(f"{rule_name} ({len(items)} matches for {key}, ambiguous)")
+                continue
+
+            if rule.get("store_as"):
+                rule_results[rule["store_as"]] = item
+
+            if not compare_attribute or not compare_zone:
+                # A pure resolution step (e.g. Variety -> Commodity) that
+                # only feeds a later rule via "result:" -- no content of its
+                # own to compare, so finding the row is the whole check.
+                passed_zones += 1
+                passed_zone_names.append(rule_name)
+                continue
+
+            expected_value = str(item.get(compare_attribute, "")).strip().upper()
+            fuzzy_threshold = rule.get("fuzzy_threshold")
+
+            def get_rule_actual_text(zone=compare_zone):
+                return get_compare_text(zone, zone_content, extracted_fields, text_blocks)
+
+            def refresh_rule_source(zone=compare_zone):
+                # compare_zone can be sourced from either extraction call
+                # depending on config -- refresh whichever one actually
+                # produced it, not both, to avoid a needless extra Gemini call.
+                if zone in text_block_prompts:
+                    text_blocks.update(extract_label_text_blocks(extracted_bytes, text_block_prompts, vision_llm_api_key))
+                elif zone in extract_field_specs:
+                    extracted_fields.update(extract_label_fields(extracted_bytes, extract_field_specs, vision_llm_api_key))
+
+            if expected_value:
+                matched, actual_text = content_matches_with_retry(
+                    expected_value, fuzzy_threshold, get_rule_actual_text, refresh_rule_source
+                )
+                if matched:
+                    passed_zones += 1
+                    passed_zone_names.append(rule_name)
+                else:
+                    failed_zones.append(
+                        f"{rule_name} (Expected {compare_attribute} '{expected_value}', label shows '{actual_text}')"
+                    )
+            else:
+                passed_zones += 1
+                passed_zone_names.append(rule_name)
+
+        # Rule 9's Size Prompt: the commodity that decides which heading is
+        # expected is only known once the Variety lookup above has resolved
+        # it (via a prior rule's "store_as"), so this runs after lookup_rules
+        # rather than alongside field_checks/text_block_checks.
+        for check in size_prompt_checks:
+            check_name = check.get("name", "Size Prompt")
+            commodity_value = resolve_lookup_value(
+                check.get("commodity_source"), extracted_fields, config_data, rule_results
+            )
+            if not commodity_value:
+                failed_zones.append(f"{check_name} (Could not resolve commodity)")
+                continue
+
+            expected_prompt = expected_size_prompt(commodity_value)
+            if expected_prompt.upper() not in full_label_text.upper():
+                failed_zones.append(f"{check_name} (Expected prompt '{expected_prompt}', not found on label)")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # Some punnet designs are printed on pre-made packaging stock that
+        # already carries a fixed color/style tag (e.g. "Hell & Kernlos") --
+        # a real defect if the wrong stock is used for a batch of a
+        # different-colored variety (e.g. Crimson Seedless, a Red Seedless
+        # variety, printed on White-Seedless-tagged packaging). The
+        # mapping is declared per-check in config, not hardcoded, since
+        # which variety groups are even allowed -- let alone their exact
+        # tag wording -- is spec-specific (e.g. 8D only allows White/Red,
+        # not Black); a variety group missing from the map fails naturally,
+        # which also enforces "not an allowed variety for this spec".
+        for check in color_tag_checks:
+            check_name = check.get("name", "Packaging color tag")
+            variety_group_code = resolve_lookup_value(
+                check.get("variety_group_source"), extracted_fields, config_data, rule_results
+            )
+            if not variety_group_code:
+                failed_zones.append(f"{check_name} (Could not resolve variety group)")
+                continue
+
+            expected_tag = check.get("tag_by_variety_group", {}).get(variety_group_code.upper())
+            if not expected_tag:
+                failed_zones.append(f"{check_name} (Variety group '{variety_group_code}' not allowed for this spec)")
+                continue
+
+            field_name = check.get("field")
+            actual_value = extracted_fields.get(field_name)
+            actual_text = normalize_zone_text([str(actual_value)]).upper() if actual_value else ""
+            if not content_matches(expected_tag.upper(), actual_text):
+                failed_zones.append(f"{check_name} (Expected '{expected_tag}', label shows '{actual_value}')")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # A simpler sibling of color_tag_checks for specs with no printed
+        # packaging tag to cross-check against -- just restricts which
+        # variety color groups are allowed at all (e.g. "White and Red
+        # Seedless only, no Black"), resolved the same way via the existing
+        # Variety lookup's result.
+        for check in allowed_variety_group_checks:
+            check_name = check.get("name", "Allowed variety group")
+            variety_group_code = resolve_lookup_value(
+                check.get("variety_group_source"), extracted_fields, config_data, rule_results
+            )
+            allowed = [v.upper() for v in check.get("allowed", [])]
+            if not variety_group_code:
+                failed_zones.append(f"{check_name} (Could not resolve variety group)")
+            elif variety_group_code.upper() not in allowed:
+                failed_zones.append(f"{check_name} (Variety group '{variety_group_code}' not allowed)")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # Chronological ordering between two printed dates (e.g. an expiry
+        # date must fall after the production date) -- plain string
+        # comparison doesn't work for dd.mm.yyyy text, so this actually
+        # parses both as dates. strptime tolerates the single-digit
+        # day/month forms seen on real labels (e.g. "7.09.2026").
+        for check in date_comparison_checks:
+            check_name = check.get("name", "Date comparison")
+            date_format = check.get("date_format", "%d.%m.%Y")
+            earlier_value = extracted_fields.get(check.get("earlier_field"))
+            later_value = extracted_fields.get(check.get("later_field"))
+            if not earlier_value or not later_value:
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+                continue
+            try:
+                earlier_date = datetime.strptime(str(earlier_value).strip(), date_format)
+                later_date = datetime.strptime(str(later_value).strip(), date_format)
+            except ValueError:
+                failed_zones.append(f"{check_name} (Could not parse '{earlier_value}' / '{later_value}' as dates)")
+                continue
+            if later_date <= earlier_date:
+                failed_zones.append(f"{check_name} ('{later_value}' is not after '{earlier_value}')")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # Numeric cross-check between printed weights/quantities (e.g. net +
+        # tare + pallet base weight must equal the printed gross weight) --
+        # a real Dole label field, not just a formatting check. Values are
+        # parsed as plain numbers; a small tolerance absorbs rounding on
+        # printed weights.
+        for check in arithmetic_checks:
+            check_name = check.get("name", "Arithmetic check")
+            operand_fields = check.get("operands", [])
+            target_field = check.get("target")
+            tolerance = check.get("tolerance", 0.01)
+            raw_values = [extracted_fields.get(f) for f in operand_fields] + [extracted_fields.get(target_field)]
+            if any(v is None or str(v).strip() == "" for v in raw_values):
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+                continue
+            try:
+                operand_values = [float(re.sub(r"[^\d.\-]", "", str(extracted_fields[f]))) for f in operand_fields]
+                target_value = float(re.sub(r"[^\d.\-]", "", str(extracted_fields[target_field])))
+            except ValueError:
+                failed_zones.append(f"{check_name} (Could not parse numeric values)")
+                continue
+            computed = sum(operand_values)
+            if abs(computed - target_value) > tolerance:
+                failed_zones.append(
+                    f"{check_name} ({' + '.join(operand_fields)} = {computed:g}, expected {target_field} = {target_value:g})"
+                )
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # A hard (pass/fail-affecting) equality between two extracted
+        # fields -- e.g. a printed order number must match the barcode's
+        # own human-readable number. Distinct from warning_checks, which
+        # are deliberately soft/non-blocking for a different kind of
+        # cross-field mismatch.
+        for check in field_equality_checks:
+            check_name = check.get("name", "Field equality")
+            value = extracted_fields.get(check.get("field"))
+            compare_value = extracted_fields.get(check.get("compare_field"))
+            if not value or not compare_value:
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+            elif normalize_zone_text([str(value)]) != normalize_zone_text([str(compare_value)]):
+                failed_zones.append(f"{check_name} ('{value}' does not match '{compare_value}')")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # A printed code whose digits, once reordered per-config, encode a
+        # week number (01-53) and an ISO day-of-week (1-7) -- e.g. a Pack
+        # Ref like "6403" where the last 2 digits move in front of the
+        # first 2 ("0364"), the leading digit is discarded, and what's left
+        # ("364") reads as week 36 / day 4. Config supplies the digit
+        # positions (0-indexed into the raw extracted digit string) that
+        # make up the week and the day, so this stays generic rather than
+        # hardcoding this one spec's specific shuffle.
+        for check in week_day_code_checks:
+            check_name = check.get("name", "Week/day code check")
+            value = extracted_fields.get(check.get("field"))
+            expected_length = check.get("length")
+            week_indices = check.get("week_digit_indices", [])
+            day_indices = check.get("day_digit_indices", [])
+            if not value:
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+                continue
+            digits = re.sub(r"\D", "", str(value))
+            if expected_length and len(digits) != expected_length:
+                failed_zones.append(f"{check_name} (Expected {expected_length} digits, got '{value}')")
+                continue
+            try:
+                week_str = "".join(digits[i] for i in week_indices)
+                day_str = "".join(digits[i] for i in day_indices)
+                week_num = int(week_str)
+                day_num = int(day_str)
+            except (IndexError, ValueError):
+                failed_zones.append(f"{check_name} (Could not parse '{value}')")
+                continue
+            if not (1 <= week_num <= 53) or not (1 <= day_num <= 7):
+                failed_zones.append(f"{check_name} ('{value}' -> week {week_str} / day {day_str} not valid)")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # Visual judgment on specific graphics (e.g. a 100% Vegetarian logo
+        # that must print in actual color, versus an FSSAI logo that's
+        # allowed to be black-and-white) -- one Gemini call covers every
+        # configured logo, mirroring extract_label_fields' one-call-for-
+        # every-field batching.
+        if logo_checks:
+            logo_specs = {c["name"]: c.get("description", c["name"]) for c in logo_checks}
+            logo_results = check_label_logos(extracted_bytes, logo_specs, vision_llm_api_key)
+            for check in logo_checks:
+                check_name = check["name"]
+                require_color = check.get("require_color", False)
+                result = logo_results.get(check_name, {})
+                if not result.get("present"):
+                    failed_zones.append(f"{check_name} (Missing from label)")
+                elif require_color and not result.get("color"):
+                    failed_zones.append(f"{check_name} (Must be printed in color, appears black-and-white)")
+                else:
+                    passed_zones += 1
+                    passed_zone_names.append(check_name)
+
+        # Fold extracted fields/text blocks into the same dict the old
+        # zone-crop system populates, purely so the audit trail (uploaded to
+        # S3 as _content.json by the caller) still captures what was found
+        # on a layout-agnostic label, not just an empty zone_content.
+        for name, value in {**extracted_fields, **text_blocks}.items():
+            zone_content.setdefault(name, [str(value)] if value is not None else [])
+
+        total_regions = (
+            len(target_regions) + len(full_label_checks) + len(lookup_rules)
+            + len(field_checks) + len(text_block_checks) + len(size_prompt_checks)
+            + len(color_tag_checks) + len(allowed_variety_group_checks)
+            + len(date_comparison_checks) + len(arithmetic_checks) + len(field_equality_checks)
+            + len(week_day_code_checks) + len(logo_checks)
+        )
         passed_list_str = "\n".join([f"  - ✅ {pz}" for pz in passed_zone_names]) if passed_zone_names else "  - None"
+        warnings_block = (
+            f"• Warnings:\n" + "\n".join([f"  - ⚠️ {w}" for w in warnings]) + "\n"
+        ) if warnings else ""
+        label_type_line = f"• Label Type: *{variant_suffix.capitalize()}*\n" if variant_suffix else ""
 
         if not failed_zones and passed_zones == total_regions:
             return "PASS", (
                 f"✅ *Layout Verification PASSED*\n\n"
                 f"• Spec Reference: *{spec_code}*\n"
+                f"{label_type_line}"
                 f"• Target Zones Checked: *{total_regions} blocks*\n"
-                f"• Passed Blocks:\n{passed_list_str}\n\n"
+                f"• Passed Blocks:\n{passed_list_str}\n"
+                f"{warnings_block}\n"
                 f"_All required zones matched their expected content._"
             ), zone_content
         else:
@@ -1014,8 +2061,10 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             return "FAIL", (
                 f"❌ *Layout Verification FAILED*\n\n"
                 f"• Spec Reference: *{spec_code}*\n"
+                f"{label_type_line}"
                 f"• Passed Blocks:\n{passed_list_str}\n"
-                f"• Failed Blocks:\n{failed_list}\n\n"
+                f"• Failed Blocks:\n{failed_list}\n"
+                f"{warnings_block}\n"
                 f"_Please fill in the missing sections on the label._"
             ), zone_content
 

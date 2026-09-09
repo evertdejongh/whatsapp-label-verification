@@ -1,0 +1,47 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "CustomerCode": "the customer code printed in large bold font on the label (e.g. 'AK')",
+    "LotNumber": "the value printed next to 'Lot Nr/Номер Партии:'",
+    "ProductionDate": "the date printed next to 'Дата изготовления/Production date:', in dd.mm.yyyy format",
+    "HarvestYear": "the year printed next to 'Урожай/Harvest:'",
+    "PUC": "the value printed next to 'PUC/УКП:'",
+    "GGN": "the 13-digit value printed next to 'GGN/ГГН:'"
+  },
+  "field_checks": [
+    {
+      "field": "CustomerCode",
+      "name": "Customer code present"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number printed"
+    },
+    {
+      "field": "ProductionDate",
+      "name": "Production date format",
+      "expected_pattern": "^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$"
+    },
+    {
+      "field": "HarvestYear",
+      "name": "Harvest year",
+      "expected_pattern": "^2026$"
+    },
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    }
+  ]
+}

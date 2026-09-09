@@ -1,0 +1,78 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "Variety": null,
+    "ExporterName": "the value printed next to the 'Exporter:' heading",
+    "ExporterAddress": "the value printed next to the 'Exporter Address:' heading",
+    "PackingDate": "the value printed next to the 'Packing date:' heading",
+    "PUC": null,
+    "GGN": "the 13-digit GGN number printed next to the 'GGN:' heading",
+    "PackRef": "the value printed next to the 'Pack Ref:' heading",
+    "ExporterGLN": "the number printed next to the 'GLN:' or 'GLN/COC:' heading beneath the Exporter Address",
+    "VarietyGroupName": "the short variety group name (e.g. 'WHITE SEEDLESS', 'RED SEEDLESS') printed by itself in a large bold standalone box in the bottom-left corner of the label, below the Inv Code/Class boxes. This is a distinct printed box, not the Commodity or Name field. If this box is not present anywhere on the label, return null -- do not substitute the Commodity or Name value instead."
+  },
+  "field_checks": [
+    {
+      "field": "ExporterName",
+      "name": "Exporter name",
+      "expected_pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD"
+    },
+    {
+      "field": "ExporterAddress",
+      "name": "Exporter address",
+      "expected_pattern": "26\\s+BELLA\\s+ROSA\\s+STREET[\\s\\S]{0,30}BELLVILLE[\\s\\S]{0,30}(SOUTH\\s+AFRICA[\\s\\S]{0,10}7530|7530[\\s\\S]{0,10}SOUTH\\s+AFRICA)"
+    },
+    {
+      "field": "PackingDate",
+      "name": "Packing date format",
+      "expected_pattern": "^[A-Za-z]{3,9}\\s+\\d{4}$"
+    },
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "PackRef",
+      "name": "Pack Ref printed"
+    },
+    {
+      "field": "ExporterGLN",
+      "name": "Exporter GLN",
+      "expected_pattern": "^6009644340002$"
+    },
+    {
+      "field": "VarietyGroupName",
+      "name": "Variety group name printed"
+    }
+  ],
+  "week_day_code_checks": [
+    {
+      "name": "Pack Ref week/day validation",
+      "field": "PackRef",
+      "length": 4,
+      "week_digit_indices": [3, 0],
+      "day_digit_indices": [1]
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "Variety": null,
+    "GGN": "the 13-digit GGN number printed on the label",
+    "LotNumber": "the lot/batch code printed on the label"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ]
+}

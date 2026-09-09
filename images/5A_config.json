@@ -1,0 +1,31 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "Variety": "the value printed next to the 'Variëteit' heading",
+    "GGN": "the 13-digit GGN number printed on the label"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ],
+  "allowed_variety_group_checks": [
+    {
+      "name": "Allowed variety group",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "allowed": ["WS", "RS"]
+    }
+  ]
+}

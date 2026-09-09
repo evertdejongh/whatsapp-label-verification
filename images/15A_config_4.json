@@ -1,0 +1,40 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "CustomerCode": "the 2-digit customer code printed in large bold font on the label (e.g. '33')",
+    "OrderNumber": "the value printed next to 'Номер заказа:'",
+    "BarcodeNumber": "the human-readable code printed directly below the barcode graphic",
+    "PUC": "the value printed next to 'PUC/УКП:'",
+    "GGN": "the 13-digit value printed next to 'GGN/ГГН:'"
+  },
+  "field_checks": [
+    {
+      "field": "CustomerCode",
+      "name": "Customer code",
+      "expected_pattern": "^33$"
+    },
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    }
+  ],
+  "field_equality_checks": [
+    {
+      "name": "Order number matches barcode",
+      "field": "OrderNumber",
+      "compare_field": "BarcodeNumber"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    }
+  ]
+}

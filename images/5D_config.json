@@ -1,0 +1,40 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "Variety": "the value printed next to the 'Sorte'/'Variety'/'Variëteit' heading",
+    "GGN": "the 13-digit GGN number printed on the label",
+    "LabelColor": "the dominant background or border color of the label itself, not the printed text color -- e.g. 'Green', 'Red', 'Purple'"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Label color matches variety",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "LabelColor",
+      "tag_by_variety_group": {
+        "WS": "GREEN",
+        "RS": "RED",
+        "BS": "RED",
+        "BX": "PURPLE",
+        "RX": "PURPLE",
+        "3X": "PURPLE"
+      }
+    }
+  ]
+}

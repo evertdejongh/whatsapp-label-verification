@@ -46,12 +46,12 @@
     {
       "field": "Pack",
       "name": "Allowed Pack code",
-      "expected_pattern": "^A04I$"
+      "expected_pattern": "^A05D$"
     },
     {
       "field": "InventoryCode",
       "name": "Allowed Inventory code",
-      "expected_pattern": "^LD$"
+      "expected_pattern": "^P5$"
     },
     {
       "field": "BerrySize",

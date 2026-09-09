@@ -1,0 +1,165 @@
+{
+  "commodity": "GR",
+  "target_regions": [
+    {
+      "name": "Variety Group languages",
+      "box": {
+        "Left": 0.005,
+        "Top": 0.023,
+        "Width": 0.572,
+        "Height": 0.351
+      },
+      "use_vision_llm": true,
+      "expected_token_count": 23
+    },
+    {
+      "name": "IAN number",
+      "box": {
+        "Left": 0.602,
+        "Top": 0.028,
+        "Width": 0.299,
+        "Height": 0.071
+      },
+      "expected_pattern": "\\b\\d{5}\\b"
+    },
+    {
+      "name": "Grower GGN",
+      "box": {
+        "Left": 0.179,
+        "Top": 0.378,
+        "Width": 0.395,
+        "Height": 0.077
+      },
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "name": "PHC address",
+      "box": {
+        "Left": 0.15,
+        "Top": 0.45,
+        "Width": 0.44,
+        "Height": 0.26
+      }
+    },
+    {
+      "name": "Country languages",
+      "box": {
+        "Left": 0.578,
+        "Top": 0.096,
+        "Width": 0.326,
+        "Height": 0.277
+      },
+      "use_vision_llm": true,
+      "expected_token_count": 23
+    },
+    {
+      "name": "Lidl Product number",
+      "box": {
+        "Left": 0.63,
+        "Top": 0.75,
+        "Width": 0.25,
+        "Height": 0.11
+      },
+      "use_textract": true
+    },
+    {
+      "name": "Barcode and address",
+      "box": {
+        "Left": 0.86,
+        "Top": 0.027,
+        "Width": 0.135,
+        "Height": 0.889
+      }
+    },
+    {
+      "name": "Lidl key",
+      "box": {
+        "Left": 0.1722,
+        "Top": 0.7665,
+        "Width": 0.0889,
+        "Height": 0.0813
+      },
+      "expected_pattern": "1\\s*1\\s*4"
+    }
+  ],
+  "full_label_checks": [
+    {
+      "name": "Supplier name",
+      "pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD"
+    },
+    {
+      "name": "Supplier registration number",
+      "pattern": "6009644340002"
+    },
+    {
+      "name": "Origin statement",
+      "pattern": "(ORIGIN\\s+SOUTH\\s+AFRICA|COUNTRY\\s+OF\\s+ORIGIN\\s+SOUTH\\s+AFRICA)"
+    },
+    {
+      "name": "Supplier address",
+      "pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD,?\\s*26\\s+BELLA\\s+ROSA\\s+STREET,?\\s*BELLVILLE,?\\s*7530"
+    },
+    {
+      "name": "Importer details",
+      "pattern": "IMPORTED\\s+BY\\s*:?\\s*DOLE\\s+EUROPE\\s+GMBH"
+    },
+    {
+      "name": "Importer GLN",
+      "pattern": "4014071000001"
+    }
+  ],
+  "extract_fields": ["PUC", "Variety", "Pack", "InventoryCode"],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "Grower GGN"
+    },
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety",
+        "Commodity": "config:commodity"
+      },
+      "store_as": "variety"
+    },
+    {
+      "name": "Variety Group languages content check",
+      "table": "whatsapp-variety-group",
+      "key": {
+        "VarietyGroupCode": "result:variety.VarietyGroupCode"
+      },
+      "compare_attribute": "LidlTranslations",
+      "compare_zone": "Variety Group languages",
+      "fuzzy_threshold": 0.9
+    },
+    {
+      "name": "Lidl Product Number / Commodity cross-check",
+      "table": "whatsapp-commodity",
+      "key": {
+        "Commodity": "result:variety.Commodity"
+      },
+      "compare_attribute": "LidlProductNumber",
+      "compare_zone": "Lidl Product number"
+    },
+    {
+      "name": "IAN Numbers cross-check",
+      "table": "whatsapp-ian-numbers",
+      "key": {
+        "lookup_key": [
+          "result:variety.Commodity",
+          "result:variety.VarietyGroupCode",
+          "field:Pack",
+          "field:InventoryCode"
+        ]
+      },
+      "compare_attribute": "IANNumber",
+      "compare_zone": "IAN number"
+    }
+  ]
+}

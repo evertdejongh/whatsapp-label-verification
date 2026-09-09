@@ -1,0 +1,57 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "PUC": null,
+    "Variety": null,
+    "GGN": "the 13-digit GGN number printed on the label",
+    "LotNumber": "the lot/batch code printed on the label (e.g. 'L 37 - 01')",
+    "VarietyGroup": "the produce variety group / commodity name printed on the label (e.g. 'Tafeltrauben, Hell')",
+    "PackagingColorTag": "the short pre-printed color/style tag on the packaging design near the grape illustration, e.g. 'Hell & Kernlos', 'Rot & Kernlos', or 'Blau & Kernlos' -- this is part of the fixed packaging artwork, not overprinted variable text"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number"
+    },
+    {
+      "field": "VarietyGroup",
+      "name": "Variety Group printed on label"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Packaging color tag matches variety",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "PackagingColorTag",
+      "tag_by_variety_group": {
+        "WS": "HELL & KERNLOS",
+        "RS": "ROT & KERNLOS"
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "ProductionDate": "the date printed next to 'Production date / Дата изготовления:', in dd.mm.yyyy format",
+    "UnitsCount": "the number printed next to 'Количество мест:'",
+    "GrossWeight": "the number printed next to 'Вес брутто:' (do not include the 'kg' unit)",
+    "NetWeight": "the number printed next to 'Вес нетто:' (do not include the 'kg' unit)",
+    "TareWeight": "the number printed next to 'Вес тары:' (do not include the 'kg' unit)",
+    "PalletWeight": "the number printed next to 'Вес паллета:' (do not include the 'kg' unit)",
+    "LotNumber": "the value printed next to 'Lot number/Номер партии:'"
+  },
+  "field_checks": [
+    {
+      "field": "ProductionDate",
+      "name": "Production date format",
+      "expected_pattern": "^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$"
+    },
+    {
+      "field": "UnitsCount",
+      "name": "Units count printed"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number printed"
+    }
+  ],
+  "arithmetic_checks": [
+    {
+      "name": "Net + tare + pallet weight equals gross weight",
+      "operands": ["NetWeight", "TareWeight", "PalletWeight"],
+      "target": "GrossWeight"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "Variety": "the value printed next to the 'Sorte' heading",
+    "PUC": null,
+    "GGN": "the 13-digit GGN number printed on the label",
+    "VarietyGroup": "the produce variety group text printed at the top of the label (e.g. 'Tafeltrauben Hell, kernlos' or 'Tafeltrauben Dunkel, kernlos')",
+    "Barcode": "the number printed directly below the barcode graphic"
+  },
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ],
+  "full_label_checks": [
+    {
+      "name": "Origin statement",
+      "pattern": "URSPRUNG\\s*:?\\s*S.DAFRIKA"
+    },
+    {
+      "name": "Packed for address",
+      "pattern": "ABGEPACKT\\s+F.R\\s*:?\\s*DOLE\\s+EUROPE\\s+GMBH\\s*[|/7I]?\\s*STADTDEICH\\s*7\\s*[|,.I]?\\s*D-?\\s*20097\\s+HAMBURG\\s*[|,.I-]?\\s*GERMANY\\s*[-,.]?\\s*GLN\\s*:?\\s*4014071000001"
+    },
+    {
+      "name": "Net weight",
+      "pattern": "NETTOGEWICHT\\s*:?\\s*650\\s*G"
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Variety Group text matches variety",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "VarietyGroup",
+      "tag_by_variety_group": {
+        "WS": "Tafeltrauben Hell, kernlos",
+        "RS": "Tafeltrauben Dunkel, kernlos"
+      }
+    },
+    {
+      "name": "Barcode matches variety",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "Barcode",
+      "tag_by_variety_group": {
+        "WS": "2009010365749",
+        "RS": "2009010243450"
+      }
+    }
+  ],
+  "allowed_variety_group_checks": [
+    {
+      "name": "Allowed variety group",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "allowed": ["WS", "RS"]
+    }
+  ]
+}

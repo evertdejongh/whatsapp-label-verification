@@ -1,0 +1,57 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "PUC": null,
+    "GGN": "the 13-digit GGN number printed on the label",
+    "LotNumber": "the lot/batch code printed next to the 'Lot no.' heading (e.g. 'L 37 - 01')"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number format",
+      "expected_pattern": "^L\\s(0[1-9]|[1-4][0-9]|5[0-3])\\s-\\s(0[1-7])$"
+    }
+  ],
+  "full_label_checks": [
+    {
+      "name": "Origin statement",
+      "pattern": "URSPRUNG\\s*:?\\s*S.DAFRIKA"
+    },
+    {
+      "name": "Abgepackt von heading",
+      "pattern": "ABGEPAC?KT\\s+VON\\s*:?\\s*DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD\\s*,?"
+    },
+    {
+      "name": "Street address",
+      "pattern": "26\\s+BELLA\\s+ROSA.{0,20}?\\s*[,.]?\\s*[D0].{0,2}URBAN\\s+SQR\\s*[,.]?\\s*ZA\\s+KAPSTADT\\s*7530\\s*S.DAFRIKA"
+    },
+    {
+      "name": "EDEKA line",
+      "pattern": "F.R\\s*:?\\s*EDEKA\\s*,?\\s*WWW\\.EDEKA\\.DE"
+    },
+    {
+      "name": "GLN",
+      "pattern": "GLN\\s*:?\\s*6009644340002"
+    },
+    {
+      "name": "500g printed",
+      "pattern": "500\\s*G"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "CustomerCode": "the 2-letter customer code printed in large bold font on the label (e.g. 'XU')",
+    "OrderNumber": "the value printed next to 'Order/номер партии:'",
+    "Quantum": "the value printed next to 'Квант/ Quantum:'",
+    "PUC": "the value printed next to 'PUC/УКП:'",
+    "GGN": "the 13-digit value printed next to 'GGN/ГГН:'",
+    "HarvestYear": "the year printed next to 'Урожай/Harvest:'",
+    "ImporterBlock": "the full 'Importer Name / Импортер:' line together with the 'Address/Адрес:' line directly below it"
+  },
+  "field_checks": [
+    {
+      "field": "CustomerCode",
+      "name": "Customer code",
+      "expected_pattern": "^(XU|LH|YE|WV)$"
+    },
+    {
+      "field": "OrderNumber",
+      "name": "Order number format",
+      "expected_pattern": "^RVI.{27,}$"
+    },
+    {
+      "field": "Quantum",
+      "name": "Quantum printed"
+    },
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "HarvestYear",
+      "name": "Harvest year",
+      "expected_pattern": "^2026$"
+    },
+    {
+      "field": "ImporterBlock",
+      "name": "Importer name and address",
+      "expected_pattern": "АО\\s*«\\s*АРВИАЙ\\s*\\(РАШЕН\\s*ВЕНЧУР\\s*ИНВЕСТМЕНТС\\)\\s*»[\\s\\S]{0,300}109029.{0,10}Россия.{0,10}г\\.?\\s*Москва.{0,10}ул\\.?\\s*Средняя\\s*Калитниковская.{0,10}д\\.?\\s*28.{0,10}стр\\.?\\s*4.{0,20}помещение\\s*VIII.{0,20}комната\\s*№?\\s*8"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    }
+  ]
+}

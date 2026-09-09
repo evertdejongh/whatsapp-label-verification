@@ -1,0 +1,33 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "OrderNumber": "the value printed next to 'Номер партии:'",
+    "ManufactureDate": "the date printed next to 'Дата изготовления:', in dd.mm.yyyy format",
+    "ExpiryDate": "the date printed next to 'Годен до:', in dd.mm.yyyy format"
+  },
+  "field_checks": [
+    {
+      "field": "OrderNumber",
+      "name": "Order number format",
+      "expected_pattern": "^RVI.{27,}$"
+    },
+    {
+      "field": "ManufactureDate",
+      "name": "Manufacture date format",
+      "expected_pattern": "^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$"
+    },
+    {
+      "field": "ExpiryDate",
+      "name": "Expiry date format",
+      "expected_pattern": "^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$"
+    }
+  ],
+  "date_comparison_checks": [
+    {
+      "name": "Expiry date after manufacture date",
+      "earlier_field": "ManufactureDate",
+      "later_field": "ExpiryDate",
+      "date_format": "%d.%m.%Y"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "Variety": null,
+    "LotNumber": "the lot/batch code printed on the label, e.g. 'D19-D2740-M11'",
+    "OpprLand": "the value printed next to the 'Oppr.land' heading"
+  },
+  "field_checks": [
+    {
+      "field": "LotNumber",
+      "name": "Lot number format",
+      "expected_pattern": "^[A-Z]\\d{2}-D([A-Z]\\d{4}|[A-Z]{2}\\d{5})-M\\d{2}$"
+    },
+    {
+      "field": "OpprLand",
+      "name": "Oppr.land",
+      "expected_pattern": "S.R\\s*-?\\s*AFRIKA"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ]
+}

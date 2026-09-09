@@ -1,0 +1,179 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "GTIN": "the number printed directly below the barcode next to the 'GTIN' heading (no parenthetical AI prefix on this label style)",
+    "GGN": "the 13-digit GGN number printed next to the 'GGN:' heading in the top-left box (the same number also appears as the human-readable caption beside the GLN/GGN barcode graphic)",
+    "PUC": null,
+    "Variety": "the value printed next to the 'Variety/Sorte' heading",
+    "Pack": null,
+    "InventoryCode": null,
+    "Brand": "the value printed next to the 'Brand' heading",
+    "BerrySize": "the value printed next to the 'Berry Size' heading (e.g. 'L', 'XL', 'XXL')",
+    "NAN": "the value printed next to the 'NAN/Lieferantencode' heading (e.g. '7412355 - D7520')",
+    "VarietyGroupEN": "the English produce name printed beneath the commodity name (e.g. beneath 'GRAPES') under the 'Product:' heading",
+    "VarietyGroupDE": "the value printed next to the 'Artikelname' heading",
+    "REWEPackaging": "the value printed next to the 'Units/Net Mass/Inhalt' heading (e.g. '10x500g', '4.5kg')",
+    "LotNumber": "the code printed next to the 'Lot number/Losnummer' heading (e.g. 'L 3604')"
+  },
+  "field_checks": [
+    {
+      "field": "LotNumber",
+      "name": "Lot number format",
+      "expected_pattern": "^L\\s?(0[1-9]|[1-4][0-9]|5[0-3])(0[1-7])$"
+    },
+    {
+      "field": "Pack",
+      "name": "Allowed Pack code",
+      "expected_pattern": "^A05D$"
+    },
+    {
+      "field": "InventoryCode",
+      "name": "Allowed Inventory code",
+      "expected_pattern": "^P5$"
+    },
+    {
+      "field": "BerrySize",
+      "name": "Allowed Berry Size",
+      "expected_pattern": "^L$"
+    },
+    {
+      "field": "Brand",
+      "name": "Allowed Brand",
+      "expected_pattern": "^BLACK$"
+    }
+  ],
+  "full_label_checks": [
+    {
+      "name": "Product heading",
+      "pattern": "PRODUCT\\s*:"
+    },
+    {
+      "name": "Artikelname heading",
+      "pattern": "ARTIKELNAME\\s*:"
+    },
+    {
+      "name": "Variety/Sorte heading",
+      "pattern": "VARIETY\\s*/\\s*SORTE"
+    },
+    {
+      "name": "Origin statement",
+      "pattern": "ORIGIN\\s*/\\s*URSPRUNG\\s*:?\\s*SOUTH\\s+AFRICA\\s*/\\s*S.DAFRIKA"
+    },
+    {
+      "name": "Class/Klasse heading",
+      "pattern": "CLASS\\s*/\\s*KLASSE"
+    },
+    {
+      "name": "Units heading",
+      "pattern": "UNITS\\s*/\\s*NET\\s+MASS\\s*/\\s*INHALT"
+    },
+    {
+      "name": "Caliber heading",
+      "pattern": "CALIBER\\s*/\\s*KALIBER"
+    },
+    {
+      "name": "Lot number heading",
+      "pattern": "LOT\\s+NUMBER\\s*/\\s*LOSNUMMER"
+    },
+    {
+      "name": "NAN heading",
+      "pattern": "NAN\\s*/\\s*LIEFERANTENCODE"
+    },
+    {
+      "name": "GTIN heading",
+      "pattern": "GTIN"
+    },
+    {
+      "name": "Grapes printed",
+      "pattern": "GRAPES"
+    },
+    {
+      "name": "Exported by address",
+      "pattern": "EXPORTED\\s+BY\\s+DOLE\\s+SOUTH\\s+AFRICA\\s+PTY\\s*\\(LTD\\)\\s*[,.]?\\s*26\\s+BELLA\\s+ROSA.{0,20}?\\s*[,.]?\\s*BELLVILLE\\s*[,.]?\\s*7530\\s+SOUTH\\s+AFRICA\\s*[,.]?\\s*GLN\\s*:?\\s*6009644340002"
+    },
+    {
+      "name": "Imported by address",
+      "pattern": "IMPORTED\\s+BY\\s*:?\\s*DOLE\\s+EUROPE\\s+GMBH\\s*[/7]?\\s*STADTDEICH\\s*7\\s*,?\\s*D-?\\s*20097\\s+HAMBURG\\s*,?\\s*GERMANY\\s*GLN\\s*:?\\s*4014071000001\\s*/\\s*G1\\s*\\(MANIFEST\\)"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    },
+    {
+      "name": "REWE NAN cross-check",
+      "table": "whatsapp-rewe-combinations",
+      "key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+      },
+      "fallback_key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+      },
+      "compare_attribute": "ReweNanPUC",
+      "compare_zone": "NAN"
+    },
+    {
+      "name": "REWE GTIN cross-check",
+      "table": "whatsapp-rewe-combinations",
+      "key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+      },
+      "fallback_key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+      },
+      "compare_attribute": "GTIN",
+      "compare_zone": "GTIN"
+    },
+    {
+      "name": "REWE Variety Group DE cross-check",
+      "table": "whatsapp-rewe-combinations",
+      "key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+      },
+      "fallback_key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+      },
+      "compare_attribute": "VarietyGroupDE",
+      "compare_zone": "VarietyGroupDE"
+    },
+    {
+      "name": "REWE Variety Group EN cross-check",
+      "table": "whatsapp-rewe-combinations",
+      "key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+      },
+      "fallback_key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+      },
+      "compare_attribute": "VarietyGroupEN",
+      "compare_zone": "VarietyGroupEN"
+    },
+    {
+      "name": "REWE Packaging cross-check",
+      "table": "whatsapp-rewe-combinations",
+      "key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+      },
+      "fallback_key": {
+        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+      },
+      "compare_attribute": "REWEPackaging",
+      "compare_zone": "REWEPackaging"
+    }
+  ]
+}
