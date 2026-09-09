@@ -975,10 +975,16 @@ def group_spec_files(files):
     return groups
 
 
+ALL_SPECS = "__all__"
+
+
 def render_spec_selector(token, groups, active_spec, descriptions):
     token_esc = html_escape(token)
     chips = "".join(
-        f"<a href='?token={token_esc}&view=files&spec={html_escape(code)}' "
+        # Clicking the already-active chip again would otherwise just reload
+        # the same single-spec view -- instead it toggles to the "all specs"
+        # view, a cheap way to get a "deselect" without any client-side JS.
+        f"<a href='?token={token_esc}&view=files&spec={ALL_SPECS if code == active_spec else html_escape(code)}' "
         f"class='{'active' if code == active_spec else ''}' style='font-size:12px;padding:5px 12px' "
         f"title='{html_escape(descriptions.get(code, 'No Spec Catalog description on file'))}'>"
         f"{html_escape(code)} ({len(items)})</a>"
@@ -1076,36 +1082,57 @@ def render_file_row(token, spec_code, f, editing, error=None, content_override=N
 def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_override, descriptions, page_error=None):
     token_esc = html_escape(token)
     selector = render_spec_selector(token, groups, spec_code, descriptions)
-    spec_files = sorted(groups.get(spec_code, []), key=lambda f: f['filename'])
-
     page_error_html = f"<div class='error'>{html_escape(page_error)}</div>" if page_error else ""
 
-    spec_description = descriptions.get(spec_code, '')
-    description_banner = ""
-    if spec_code:
+    if spec_code == ALL_SPECS:
+        total_files = sum(len(v) for v in groups.values())
         description_banner = (
             f"<div class='sub' style='font-size:15px;font-weight:600;color:#1f2430'>"
-            f"{html_escape(spec_code)} &mdash; {html_escape(spec_description) if spec_description else '<i>no Spec Catalog description on file</i>'}"
-            f"</div>"
+            f"All specs &mdash; {len(groups)} spec(s), {total_files} file(s)</div>"
+        )
+        rows = []
+        for code in sorted(groups.keys(), key=spec_code_sort_key):
+            desc = descriptions.get(code, '')
+            heading = f"{html_escape(code)}" + (f" &mdash; {html_escape(desc)}" if desc else "")
+            rows.append(f"<tr><td colspan='5' style='background:#f5f7f5;font-weight:600;padding-top:14px'>{heading}</td></tr>")
+            for f in sorted(groups[code], key=lambda x: x['filename']):
+                editing = edit_key == f['key']
+                # Every row's "spec" context is the ALL_SPECS sentinel, not
+                # the file's own owning code -- that's what makes Cancel/
+                # Save/Delete/Replace redirect back to this all-specs view
+                # instead of jumping into that one spec's single-spec view.
+                rows.append(render_file_row(token, ALL_SPECS, f, editing, edit_error if editing else None, edit_content_override if editing else None))
+        new_config_link = ""
+        upload_form = ""  # adding a brand-new file needs a specific target spec, not meaningful here
+    else:
+        spec_files = sorted(groups.get(spec_code, []), key=lambda f: f['filename'])
+
+        spec_description = descriptions.get(spec_code, '')
+        description_banner = ""
+        if spec_code:
+            description_banner = (
+                f"<div class='sub' style='font-size:15px;font-weight:600;color:#1f2430'>"
+                f"{html_escape(spec_code)} &mdash; {html_escape(spec_description) if spec_description else '<i>no Spec Catalog description on file</i>'}"
+                f"</div>"
+            )
+
+        has_config = any(f['filename'] == f"{spec_code}_config.json" for f in spec_files)
+        new_config_key = f"specs/{spec_code}_config.json" if spec_code else None
+
+        rows = []
+        if spec_code and not has_config and edit_key == new_config_key:
+            synthetic = {'key': new_config_key, 'filename': f"{spec_code}_config.json", 'size': 0, 'last_modified': ''}
+            rows.append(render_file_row(token, spec_code, synthetic, True, edit_error, edit_content_override))
+        for f in spec_files:
+            editing = edit_key == f['key']
+            rows.append(render_file_row(token, spec_code, f, editing, edit_error if editing else None, edit_content_override if editing else None))
+
+        new_config_link = (
+            f"<a class='btn' href='?token={token_esc}&view=files&spec={html_escape(spec_code)}&edit={urllib.parse.quote(new_config_key)}'>+ New config</a>"
+            if spec_code and not has_config else ""
         )
 
-    has_config = any(f['filename'] == f"{spec_code}_config.json" for f in spec_files)
-    new_config_key = f"specs/{spec_code}_config.json" if spec_code else None
-
-    rows = []
-    if spec_code and not has_config and edit_key == new_config_key:
-        synthetic = {'key': new_config_key, 'filename': f"{spec_code}_config.json", 'size': 0, 'last_modified': ''}
-        rows.append(render_file_row(token, spec_code, synthetic, True, edit_error, edit_content_override))
-    for f in spec_files:
-        editing = edit_key == f['key']
-        rows.append(render_file_row(token, spec_code, f, editing, edit_error if editing else None, edit_content_override if editing else None))
-
-    new_config_link = (
-        f"<a class='btn' href='?token={token_esc}&view=files&spec={html_escape(spec_code)}&edit={urllib.parse.quote(new_config_key)}'>+ New config</a>"
-        if spec_code and not has_config else ""
-    )
-
-    upload_form = f"""
+        upload_form = f"""
   <form method="post" style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
     <input type="hidden" name="token" value="{token_esc}">
     <input type="hidden" name="view" value="files">
