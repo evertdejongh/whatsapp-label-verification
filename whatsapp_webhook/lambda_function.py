@@ -1794,6 +1794,10 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                                             f"Lookup rule '{rule_name}' resolved via digit-confusion retry: "
                                             f"{key} -> {variant_key}"
                                         )
+                                        warnings.append(
+                                            f"{rule_name}: only matched after correcting a likely 5/6 misread "
+                                            f"({key} -> {variant_key}) -- consider a sharper photo"
+                                        )
                                         found_items = [variant_item]
                                         key = variant_key
                                         break
@@ -1897,8 +1901,12 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                     # benefit.
                     for variant in generate_digit_confusion_variants(actual_text):
                         if content_matches(expected_value, variant, fuzzy_threshold):
-                            matched, actual_text = True, variant
                             logger.info(f"Lookup rule '{rule_name}' matched via digit-confusion retry: '{variant}'")
+                            warnings.append(
+                                f"{rule_name}: only matched after correcting a likely 5/6 misread "
+                                f"('{actual_text}' -> '{variant}') -- consider a sharper photo"
+                            )
+                            matched, actual_text = True, variant
                             break
                 if matched:
                     passed_zones += 1
