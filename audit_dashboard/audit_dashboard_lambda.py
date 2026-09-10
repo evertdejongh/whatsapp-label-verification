@@ -1182,9 +1182,11 @@ def handle_files_get(token, query_params):
         return text_response(500, f'Error listing spec files: {str(e)}')
 
     groups = group_spec_files(files)
-    spec_code = query_params.get('spec', '').strip()
-    if not spec_code and groups:
-        spec_code = sorted(groups.keys(), key=spec_code_sort_key)[0]
+    # Opening the tab fresh (no ?spec= given) used to auto-select whichever
+    # spec sorted first ("00") -- confusing, since that's not actually a
+    # meaningful default, just an accident of sort order. Land on the
+    # all-specs view instead, same place re-clicking the active chip goes.
+    spec_code = query_params.get('spec', '').strip() or ALL_SPECS
 
     edit_key = query_params.get('edit', '').strip() or None
     descriptions = load_spec_descriptions()
