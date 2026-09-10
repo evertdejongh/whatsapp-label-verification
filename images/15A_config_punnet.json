@@ -29,5 +29,13 @@
       "later_field": "ExpiryDate",
       "date_format": "%d.%m.%Y"
     }
+  ],
+  "date_freshness_checks": [
+    {
+      "name": "Manufacture date is recent",
+      "field": "ManufactureDate",
+      "date_format": "%d.%m.%Y",
+      "max_days_diff": 2
+    }
   ]
 }

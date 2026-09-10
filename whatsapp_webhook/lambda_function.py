@@ -2,6 +2,7 @@ import base64
 import difflib
 import hashlib
 import hmac
+import itertools
 import json
 import logging
 import math
@@ -775,6 +776,42 @@ def content_matches_with_retry(expected_value, fuzzy_threshold, get_actual_text,
     return content_matches(expected_value, actual_text, fuzzy_threshold), actual_text
 
 
+DIGIT_CONFUSION_PAIRS = (('5', '6'),)
+
+
+def generate_digit_confusion_variants(value, pairs=DIGIT_CONFUSION_PAIRS):
+    """
+    A short printed code (PUC, GGN) needs an exact reference-table match --
+    unlike a dense text block, there's no fuzzy_threshold to smooth over
+    vision-LLM noise here. But a specific, narrow kind of noise is worth
+    compensating for anyway: on a low-resolution photo, a printed '5' and
+    '6' can look genuinely identical (confirmed on a real live label: PUC
+    "D0415"/GGN "...485296" both came back with a 6 where the label prints
+    a 5). Yields every combination of swapping each ambiguous digit in the
+    value, original first (so the common, already-correct case costs
+    nothing extra) -- e.g. "D0416" yields "D0416" then "D0415" (one
+    ambiguous digit); a value with N ambiguous digits yields 2**N variants,
+    trivial at this code length. Only ever tried as a fallback after the
+    literal extracted value has already failed to match/resolve, so this
+    never masks a genuinely different, non-digit-confusion error.
+    """
+    swap = {ch: other for pair in pairs for ch, other in (pair, pair[::-1])}
+    ambiguous_positions = [i for i, ch in enumerate(value) if ch in swap]
+    if not ambiguous_positions:
+        yield value
+        return
+    seen = set()
+    for bitmask in range(2 ** len(ambiguous_positions)):
+        chars = list(value)
+        for bit_i, pos in enumerate(ambiguous_positions):
+            if (bitmask >> bit_i) & 1:
+                chars[pos] = swap[chars[pos]]
+        variant = ''.join(chars)
+        if variant not in seen:
+            seen.add(variant)
+            yield variant
+
+
 # Rule 9's Size Prompt: the heading text that must precede the size value,
 # fixed per Commodity Code -- a stable, universal Dole business rule, not
 # per-shipment data, so it's kept as code rather than table-driven per the
@@ -1392,6 +1429,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
     color_tag_checks = config_data.get('color_tag_checks', [])
     allowed_variety_group_checks = config_data.get('allowed_variety_group_checks', [])
     date_comparison_checks = config_data.get('date_comparison_checks', [])
+    date_freshness_checks = config_data.get('date_freshness_checks', [])
     arithmetic_checks = config_data.get('arithmetic_checks', [])
     field_equality_checks = config_data.get('field_equality_checks', [])
     week_day_code_checks = config_data.get('week_day_code_checks', [])
@@ -1729,6 +1767,36 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                         else:
                             single_item = table.get_item(Key=key).get('Item')
                             found_items = [single_item] if single_item else []
+
+                            if not found_items:
+                                # A vision-extracted digit can occasionally be
+                                # a 5/6 confusion on a low-resolution photo
+                                # (see generate_digit_confusion_variants) --
+                                # retry the exact-match lookup against every
+                                # plausible correction before giving up. The
+                                # original key already failed, so it's
+                                # skipped rather than re-tried. Always on
+                                # (not a per-rule opt-in): it only ever fires
+                                # after the literal value has already failed
+                                # to resolve, so it can't turn a genuinely
+                                # correct rejection into a false pass.
+                                attr_variants = {
+                                    attr: list(generate_digit_confusion_variants(val))
+                                    for attr, val in key.items()
+                                }
+                                for combo in itertools.product(*attr_variants.values()):
+                                    variant_key = dict(zip(attr_variants.keys(), combo))
+                                    if variant_key == key:
+                                        continue
+                                    variant_item = table.get_item(Key=variant_key).get('Item')
+                                    if variant_item:
+                                        logger.info(
+                                            f"Lookup rule '{rule_name}' resolved via digit-confusion retry: "
+                                            f"{key} -> {variant_key}"
+                                        )
+                                        found_items = [variant_item]
+                                        key = variant_key
+                                        break
                     except Exception as e:
                         logger.error(f"Lookup rule '{rule_name}' table query failed: {str(e)}")
                         lookup_failed = True
@@ -1817,6 +1885,21 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 matched, actual_text = content_matches_with_retry(
                     expected_value, fuzzy_threshold, get_rule_actual_text, refresh_rule_source
                 )
+                if not matched and not fuzzy_threshold:
+                    # Same 5/6-confusion tolerance as the key lookup above,
+                    # applied here to the compared value (e.g. a GGN) rather
+                    # than the lookup key -- either side of a PUC/GGN
+                    # cross-check can be the one a low-res photo garbled.
+                    # Scoped to exact-match comparisons only (no
+                    # fuzzy_threshold): a dense fuzzy text block already gets
+                    # its own re-extraction retry above, and could contain
+                    # enough incidental 5s/6s to make this expensive for no
+                    # benefit.
+                    for variant in generate_digit_confusion_variants(actual_text):
+                        if content_matches(expected_value, variant, fuzzy_threshold):
+                            matched, actual_text = True, variant
+                            logger.info(f"Lookup rule '{rule_name}' matched via digit-confusion retry: '{variant}'")
+                            break
                 if matched:
                     passed_zones += 1
                     passed_zone_names.append(rule_name)
@@ -1921,6 +2004,36 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 continue
             if later_date <= earlier_date:
                 failed_zones.append(f"{check_name} ('{later_value}' is not after '{earlier_value}')")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # A printed date (e.g. Дата изготовления/production date) must be
+        # recent -- within a configured number of days of today, in either
+        # direction -- rather than compared against another printed field.
+        # Catches a stale/reused label rather than one freshly printed for
+        # this actual shipment. "Today" is UTC (matching the audit log's own
+        # timestamp convention elsewhere in this file); a 2-day tolerance
+        # comfortably absorbs any UTC/local timezone difference near a day
+        # boundary, so this doesn't need its own timezone handling.
+        for check in date_freshness_checks:
+            check_name = check.get("name", "Date freshness check")
+            date_format = check.get("date_format", "%d.%m.%Y")
+            max_days_diff = check.get("max_days_diff", 2)
+            value = extracted_fields.get(check.get("field"))
+            if not value:
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+                continue
+            try:
+                parsed_date = datetime.strptime(str(value).strip(), date_format).date()
+            except ValueError:
+                failed_zones.append(f"{check_name} (Could not parse '{value}' as a date)")
+                continue
+            days_diff = abs((datetime.now(timezone.utc).date() - parsed_date).days)
+            if days_diff > max_days_diff:
+                failed_zones.append(
+                    f"{check_name} ('{value}' is {days_diff} day(s) from today, expected within {max_days_diff})"
+                )
             else:
                 passed_zones += 1
                 passed_zone_names.append(check_name)
@@ -2037,7 +2150,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             len(target_regions) + len(full_label_checks) + len(lookup_rules)
             + len(field_checks) + len(text_block_checks) + len(size_prompt_checks)
             + len(color_tag_checks) + len(allowed_variety_group_checks)
-            + len(date_comparison_checks) + len(arithmetic_checks) + len(field_equality_checks)
+            + len(date_comparison_checks) + len(date_freshness_checks) + len(arithmetic_checks) + len(field_equality_checks)
             + len(week_day_code_checks) + len(logo_checks)
         )
         passed_list_str = "\n".join([f"  - ✅ {pz}" for pz in passed_zone_names]) if passed_zone_names else "  - None"

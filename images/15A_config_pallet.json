@@ -30,5 +30,13 @@
       "operands": ["NetWeight", "TareWeight", "PalletWeight"],
       "target": "GrossWeight"
     }
+  ],
+  "date_freshness_checks": [
+    {
+      "name": "Production date is recent",
+      "field": "ProductionDate",
+      "date_format": "%d.%m.%Y",
+      "max_days_diff": 2
+    }
   ]
 }
