@@ -5,7 +5,8 @@
     "OrderNumber": "the value printed next to 'Номер заказа:'",
     "BarcodeNumber": "the human-readable code printed directly below the barcode graphic",
     "PUC": "the value printed next to 'PUC/УКП:'",
-    "GGN": "the 13-digit value printed next to 'GGN/ГГН:'"
+    "GGN": "the 13-digit value printed next to 'GGN/ГГН:'",
+    "ManufactureDate": "the date printed next to 'Дата изготовления:', in d-mm-yy format (e.g. '8-09-26')"
   },
   "field_checks": [
     {
@@ -17,6 +18,11 @@
       "field": "GGN",
       "name": "GGN",
       "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "ManufactureDate",
+      "name": "Manufacture date format",
+      "expected_pattern": "^\\d{1,2}-\\d{1,2}-\\d{2}$"
     }
   ],
   "field_equality_checks": [
@@ -35,6 +41,14 @@
       },
       "compare_attribute": "GGN",
       "compare_zone": "GGN"
+    }
+  ],
+  "date_freshness_checks": [
+    {
+      "name": "Manufacture date is recent",
+      "field": "ManufactureDate",
+      "date_format": "%d-%m-%y",
+      "max_days_diff": 2
     }
   ]
 }

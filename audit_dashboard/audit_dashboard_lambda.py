@@ -37,8 +37,16 @@ TABLE_REGISTRY = {
     "whatsapp-ian-numbers": ["lookup_key"],
     "whatsapp-commodity": ["Commodity"],
     "whatsapp-rewe-combinations": ["lookup_key"],
-    "whatsapp-india-addresses": ["Code"],
+    "whatsapp-agent-addresses": ["Code"],
 }
+
+# Columns that are the table's key but are a synthetic/derived composite
+# (e.g. "GR#BS#A05D#P5" built from other attributes) rather than something
+# meaningful to browse or hand-edit -- hidden from the displayed table, but
+# still round-tripped as a hidden form field so existing-row Save/Delete
+# keep working. Adding a brand new row with a hidden key isn't supported via
+# the normal key inputs; use the "Extra field" pair to set it manually.
+HIDDEN_TABLE_COLUMNS = {"lookup_key"}
 
 ssm = boto3.client('ssm', region_name=AWS_REGION)
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
@@ -72,6 +80,8 @@ PAGE_STYLE = """
   .chips { margin-bottom:16px; }
   .chip { display:inline-block; background:#fff; border:1px solid #dde1e7; border-radius:999px; padding:4px 12px; margin:0 8px 8px 0; font-size:13px; color:#374151; }
   .toolbar { display:flex; justify-content:flex-end; gap:8px; margin-bottom:14px; }
+  .toprow { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
+  .toprow .sub, .toprow .toolbar { margin-bottom:0; }
   form.filters { margin-bottom:16px; display:flex; gap:8px; flex-wrap:wrap; }
   input, select, textarea { background:#fff; border:1px solid #d3d8e0; color:#1f2430; border-radius:6px; padding:6px 10px; font-size:13px; font-family:inherit; }
   button, .btn { background:#fff; border:1px solid #d3d8e0; color:#374151; border-radius:6px; padding:7px 16px; font-size:13px; cursor:pointer; text-decoration:none; display:inline-block; }
@@ -80,7 +90,13 @@ PAGE_STYLE = """
   .btn.disabled, button:disabled { opacity:.4; cursor:not-allowed; pointer-events:none; }
   table { border-collapse:collapse; width:100%; font-size:13px; background:#fff; }
   th, td { text-align:left; padding:9px 10px; border-bottom:1px solid #edf0f3; vertical-align:top; }
+  thead { position:sticky; top:0; z-index:2; }
   th { color:#5b6473; font-weight:600; background:#f5f7f5; border-bottom:1px solid #dde1e7; white-space:nowrap; }
+  th.sortable { cursor:pointer; user-select:none; }
+  th.sortable:hover { color:#2f6fed; }
+  th.sort-asc:after { content:' \\25B2'; font-size:10px; }
+  th.sort-desc:after { content:' \\25BC'; font-size:10px; }
+  td.wraptext { max-width:340px; white-space:normal; word-break:break-word; }
   tr.filter-row td { background:#fafbfc; padding:5px 8px; }
   tr.filter-row input { width:100%; font-size:12px; padding:5px 8px; }
   tbody tr:nth-child(even) { background:#f7fbf6; }
@@ -93,7 +109,7 @@ PAGE_STYLE = """
   td.desc { max-width:380px; white-space:normal; word-break:break-word; }
   .thumb { height:44px; width:auto; border-radius:4px; border:1px solid #dde1e7; display:block; }
   .more { display:inline-block; margin-top:14px; color:#2f6fed; text-decoration:none; }
-  .wrap { overflow-x:auto; border:1px solid #dde1e7; border-radius:8px; }
+  .wrap { overflow-x:auto; overflow-y:auto; max-height:70vh; border:1px solid #dde1e7; border-radius:8px; }
   .pill { display:inline-block; border-radius:999px; padding:3px 10px; font-size:12px; font-weight:600; text-decoration:none; }
   .pill.yes { background:#dcfce7; color:#166534; }
   .pill.no { background:#f3f4f6; color:#6b7280; }
@@ -106,6 +122,16 @@ ROW_SELECT_SCRIPT = """
 (function() {
   var table = document.getElementById('catalogTable');
   if (!table) return;
+
+  // Editing a row far down the list reloads the page (Edit is a plain
+  // link), which resets the scrollable .wrap panel back to the top --
+  // scroll the editing row (if any) back into view instead of leaving the
+  // user to hunt for it themselves.
+  var editingRow = table.querySelector('tbody tr.editing');
+  if (editingRow) {
+    editingRow.scrollIntoView({ block: 'center' });
+  }
+
   var editBtn = document.getElementById('editBtn');
   var deleteBtn = document.getElementById('deleteBtn');
   var deleteForm = document.getElementById('deleteForm');
@@ -152,6 +178,48 @@ ROW_SELECT_SCRIPT = """
       row.style.display = visible ? '' : 'none';
     });
   }
+
+  // Click a header to sort by that column -- reuses the same data-col
+  // indexing the filter row already relies on. A row mid-edit has inputs
+  // instead of plain text, so its cell value is read from the input rather
+  // than textContent; moving its row node during sort doesn't detach the
+  // form-bound inputs (they submit via the `form` attribute, not position).
+  var sortHeaders = table.querySelectorAll('thead th[data-col]');
+  var sortState = { col: null, dir: 1 };
+
+  function cellSortValue(row, col) {
+    var cell = row.children[col];
+    if (!cell) return '';
+    var input = cell.querySelector('input');
+    var raw = (input ? input.value : cell.textContent).trim();
+    return raw;
+  }
+
+  sortHeaders.forEach(function(th) {
+    th.addEventListener('click', function() {
+      var col = parseInt(th.getAttribute('data-col'), 10);
+      sortState.dir = (sortState.col === col) ? -sortState.dir : 1;
+      sortState.col = col;
+
+      sortHeaders.forEach(function(h) { h.classList.remove('sort-asc', 'sort-desc'); });
+      th.classList.add(sortState.dir === 1 ? 'sort-asc' : 'sort-desc');
+
+      var tbody = table.querySelector('tbody');
+      var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr.selectable, tr.editing'));
+      rows.sort(function(a, b) {
+        var av = cellSortValue(a, col), bv = cellSortValue(b, col);
+        var an = parseFloat(av), bn = parseFloat(bv);
+        var cmp;
+        if (av !== '' && bv !== '' && !isNaN(an) && !isNaN(bn) && String(an) === av && String(bn) === bv) {
+          cmp = an - bn;
+        } else {
+          cmp = av.toLowerCase().localeCompare(bv.toLowerCase());
+        }
+        return cmp * sortState.dir;
+      });
+      rows.forEach(function(row) { tbody.appendChild(row); });
+    });
+  });
 })();
 </script>
 """
@@ -490,14 +558,15 @@ def render_catalog(token, items, edit_item, adding_new, error):
     token_esc = html_escape(token)
 
     body = f"""
-  <div class="sub">{len(items)} spec(s) in the catalog. Click a row to select it, then Edit or Delete.</div>
-  {error_html}
-
-  <div class="toolbar">
-    <a class="btn primary" href="?token={token_esc}&view=catalog&edit=__new__">+ New</a>
-    <a id="editBtn" class="btn disabled" href="#" data-href-base="?token={token_esc}&view=catalog&edit=">Edit</a>
-    <button id="deleteBtn" class="btn danger" disabled type="button">Delete</button>
+  <div class="toprow">
+    <div class="sub">{len(items)} spec(s) in the catalog. Click a row to select it, then Edit or Delete.</div>
+    <div class="toolbar">
+      <a class="btn primary" href="?token={token_esc}&view=catalog&edit=__new__">+ New</a>
+      <a id="editBtn" class="btn disabled" href="#" data-href-base="?token={token_esc}&view=catalog&edit=">Edit</a>
+      <button id="deleteBtn" class="btn danger" disabled type="button">Delete</button>
+    </div>
   </div>
+  {error_html}
 
   <form id="{EDIT_FORM_ID}" method="post">
     <input type="hidden" name="token" value="{token_esc}">
@@ -515,7 +584,7 @@ def render_catalog(token, items, edit_item, adding_new, error):
   <div class="wrap">
   <table id="catalogTable">
     <thead>
-      <tr><th>Spec Code</th><th>Description</th><th>PDF</th><th>Actions</th></tr>
+      <tr><th data-col="0" class="sortable">Spec Code</th><th data-col="1" class="sortable">Description</th><th>PDF</th><th>Actions</th></tr>
       <tr class="filter-row">
         <td><input type="text" data-col="0" placeholder="Filter..."></td>
         <td><input type="text" data-col="1" placeholder="Filter..."></td>
@@ -640,18 +709,27 @@ def render_table_subnav(token, active_table):
     return f"<div class='nav' style='margin-bottom:10px'>{links}</div>"
 
 
-def render_table_row(key_attrs, item, columns):
+def render_table_row(key_attrs, item, display_columns):
     row_key = {k: item.get(k) for k in key_attrs}
     encoded = encode_key(row_key)
-    cells = "".join(f"<td>{html_escape(item.get(c, ''))}</td>" for c in columns)
+    cells = "".join(f"<td class='wraptext'>{html_escape(item.get(c, ''))}</td>" for c in display_columns)
     return f"<tr class='selectable' data-code='{html_escape(encoded)}'>{cells}<td></td></tr>"
 
 
-def render_table_edit_row(token, table_name, key_attrs, item, columns, is_new):
+def render_table_edit_row(token, table_name, key_attrs, item, columns, display_columns, is_new):
     cells = []
+    hidden_inputs = []
     for col in columns:
         val = html_escape(item.get(col, '')) if item else ''
         name = f"col::{html_escape(col)}"
+        if col not in display_columns:
+            # Hidden composite-key column: skip entirely on a brand new row
+            # (nothing to round-trip yet -- use the Extra field to set one by
+            # hand if truly needed), otherwise carry its existing value
+            # through as a hidden field so Save/Delete still see the full key.
+            if not is_new:
+                hidden_inputs.append(f"<input type='hidden' name='{name}' form='{TABLE_EDIT_FORM_ID}' value='{val}'>")
+            continue
         if col in key_attrs:
             if is_new:
                 cells.append(f"<td><input type='text' name='{name}' form='{TABLE_EDIT_FORM_ID}' value='{val}' required></td>")
@@ -659,6 +737,9 @@ def render_table_edit_row(token, table_name, key_attrs, item, columns, is_new):
                 cells.append(f"<td>{val}<input type='hidden' name='{name}' form='{TABLE_EDIT_FORM_ID}' value='{val}'></td>")
         else:
             cells.append(f"<td><input type='text' name='{name}' form='{TABLE_EDIT_FORM_ID}' value='{val}'></td>")
+
+    if hidden_inputs:
+        cells.append(f"<td style='display:none'>{''.join(hidden_inputs)}</td>")
 
     extra_cell = (
         f"<td>"
@@ -680,21 +761,21 @@ def render_table_edit_row(token, table_name, key_attrs, item, columns, is_new):
     return "<tr class='editing'>" + "".join(cells) + extra_cell + actions_cell + "</tr>"
 
 
-def render_tables(token, table_name, key_attrs, items, columns, edit_item, adding_new, next_key, error):
+def render_tables(token, table_name, key_attrs, items, columns, display_columns, edit_item, adding_new, next_key, error):
     edit_key = {k: edit_item.get(k) for k in key_attrs} if edit_item else None
 
     rows = []
     if adding_new:
-        rows.append(render_table_edit_row(token, table_name, key_attrs, item=None, columns=columns, is_new=True))
+        rows.append(render_table_edit_row(token, table_name, key_attrs, item=None, columns=columns, display_columns=display_columns, is_new=True))
     for item in items:
         item_key = {k: item.get(k) for k in key_attrs}
         if edit_key and item_key == edit_key:
-            rows.append(render_table_edit_row(token, table_name, key_attrs, item=item, columns=columns, is_new=False))
+            rows.append(render_table_edit_row(token, table_name, key_attrs, item=item, columns=columns, display_columns=display_columns, is_new=False))
         else:
-            rows.append(render_table_row(key_attrs, item, columns))
+            rows.append(render_table_row(key_attrs, item, display_columns))
 
-    header_cells = "".join(f"<th>{html_escape(c)}</th>" for c in columns) + "<th>Extra field</th><th>Actions</th>"
-    filter_cells = "".join(f"<td><input type='text' data-col='{i}' placeholder='Filter...'></td>" for i in range(len(columns))) + "<td></td><td></td>"
+    header_cells = "".join(f"<th data-col='{i}' class='sortable'>{html_escape(c)}</th>" for i, c in enumerate(display_columns)) + "<th>Extra field</th><th>Actions</th>"
+    filter_cells = "".join(f"<td><input type='text' data-col='{i}' placeholder='Filter...'></td>" for i in range(len(display_columns))) + "<td></td><td></td>"
 
     error_html = f"<div class='error'>{html_escape(error)}</div>" if error else ""
     token_esc = html_escape(token)
@@ -702,14 +783,15 @@ def render_tables(token, table_name, key_attrs, items, columns, edit_item, addin
 
     body = f"""
   {render_table_subnav(token, table_name)}
-  <div class="sub">{len(items)} row(s) shown from <b>{table_esc}</b> (page size {PAGE_SIZE}). Click a row to select it, then Edit or Delete.</div>
-  {error_html}
-
-  <div class="toolbar">
-    <a class="btn primary" href="?token={token_esc}&view=tables&table={table_esc}&edit=__new__">+ New</a>
-    <a id="editBtn" class="btn disabled" href="#" data-href-base="?token={token_esc}&view=tables&table={table_esc}&edit=">Edit</a>
-    <button id="deleteBtn" class="btn danger" disabled type="button">Delete</button>
+  <div class="toprow">
+    <div class="sub">{len(items)} row(s) shown from <b>{table_esc}</b> (page size {PAGE_SIZE}). Click a row to select it, then Edit or Delete.</div>
+    <div class="toolbar">
+      <a class="btn primary" href="?token={token_esc}&view=tables&table={table_esc}&edit=__new__">+ New</a>
+      <a id="editBtn" class="btn disabled" href="#" data-href-base="?token={token_esc}&view=tables&table={table_esc}&edit=">Edit</a>
+      <button id="deleteBtn" class="btn danger" disabled type="button">Delete</button>
+    </div>
   </div>
+  {error_html}
 
   <form id="{TABLE_EDIT_FORM_ID}" method="post">
     <input type="hidden" name="token" value="{token_esc}">
@@ -733,7 +815,7 @@ def render_tables(token, table_name, key_attrs, items, columns, edit_item, addin
       <tr class="filter-row">{filter_cells}</tr>
     </thead>
     <tbody>
-      {''.join(rows) if rows else f'<tr><td colspan="{len(columns) + 2}">No rows.</td></tr>'}
+      {''.join(rows) if rows else f'<tr><td colspan="{len(display_columns) + 2}">No rows.</td></tr>'}
     </tbody>
   </table>
   </div>
@@ -769,6 +851,7 @@ def handle_tables_get(token, query_params):
         for k in item.keys():
             if k not in columns:
                 columns.append(k)
+    display_columns = [c for c in columns if c not in HIDDEN_TABLE_COLUMNS]
 
     edit_item = None
     adding_new = False
@@ -783,7 +866,7 @@ def handle_tables_get(token, query_params):
             except Exception as e:
                 logger.error(f"Failed to load row for edit in {table_name}: {str(e)}")
 
-    html = render_tables(token, table_name, key_attrs, items, columns, edit_item, adding_new, next_key, error=None)
+    html = render_tables(token, table_name, key_attrs, items, columns, display_columns, edit_item, adding_new, next_key, error=None)
     return html_response(html)
 
 
@@ -929,6 +1012,51 @@ FILES_SCRIPT = """
       });
     }
   });
+
+  // Click a header to sort. The all-specs view groups files under a
+  // per-spec heading row (a single wide <td colspan>, not per-column data)
+  // -- sorting by File/Size/Modified doesn't respect that grouping, so those
+  // heading rows (and the "no files yet" placeholder, same shape) are
+  // hidden rather than reordered.
+  var filesTable = document.getElementById('filesTable');
+  if (filesTable) {
+    var fileHeaders = filesTable.querySelectorAll('thead th[data-col]');
+    var fileSortState = { col: null, dir: 1 };
+
+    function fileCellValue(row, col) {
+      var cell = row.children[col];
+      return cell ? cell.textContent.trim() : '';
+    }
+
+    function compareFileCells(col, av, bv) {
+      if (col === 2) { return parseFloat(av) - parseFloat(bv); } // "236.7 KB" -> numeric
+      return av.toLowerCase().localeCompare(bv.toLowerCase()); // filename, and "YYYY-MM-DD HH:MM" sorts correctly as text
+    }
+
+    fileHeaders.forEach(function(th) {
+      th.addEventListener('click', function() {
+        var col = parseInt(th.getAttribute('data-col'), 10);
+        fileSortState.dir = (fileSortState.col === col) ? -fileSortState.dir : 1;
+        fileSortState.col = col;
+        fileHeaders.forEach(function(h) { h.classList.remove('sort-asc', 'sort-desc'); });
+        th.classList.add(fileSortState.dir === 1 ? 'sort-asc' : 'sort-desc');
+
+        var tbody = filesTable.querySelector('tbody');
+        var fileRows = [];
+        Array.prototype.slice.call(tbody.querySelectorAll('tr')).forEach(function(row) {
+          if (row.children.length > 1) {
+            fileRows.push(row);
+          } else {
+            row.style.display = 'none';
+          }
+        });
+        fileRows.sort(function(a, b) {
+          return compareFileCells(col, fileCellValue(a, col), fileCellValue(b, col)) * fileSortState.dir;
+        });
+        fileRows.forEach(function(row) { tbody.appendChild(row); });
+      });
+    });
+  }
 })();
 </script>
 """
@@ -1079,6 +1207,29 @@ def render_file_row(token, spec_code, f, editing, error=None, content_override=N
     )
 
 
+def render_upload_form(token, spec_value):
+    """Shared by the single-spec and all-specs views: uploads target a
+    filename with an explicit spec-code prefix (e.g. "17D_label.png"), so
+    which spec owns the file is decided by that filename, not by which view
+    the admin happened to be browsing -- the "spec" field just controls
+    which page they land back on after a successful upload. Left blank on
+    the all-specs view (typing a code there re-lands on that spec's page)."""
+    token_esc = html_escape(token)
+    spec_esc = html_escape(spec_value)
+    return f"""
+  <form method="post" style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
+    <input type="hidden" name="token" value="{token_esc}">
+    <input type="hidden" name="view" value="files">
+    <input type="hidden" name="action" value="upload_new">
+    <input type="text" name="spec" value="{spec_esc}" placeholder="Spec code" style="width:90px">
+    <input type="text" name="filename" placeholder="e.g. 17D_label.png (include spec code prefix)" style="width:280px">
+    <input type="hidden" name="content_b64" class="b64target">
+    <input type="file" class="fileInput" style="display:none">
+    <button type="button" class="btn replaceBtn">Choose file &amp; upload</button>
+  </form>
+"""
+
+
 def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_override, descriptions, page_error=None):
     token_esc = html_escape(token)
     selector = render_spec_selector(token, groups, spec_code, descriptions)
@@ -1102,8 +1253,8 @@ def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_ov
                 # Save/Delete/Replace redirect back to this all-specs view
                 # instead of jumping into that one spec's single-spec view.
                 rows.append(render_file_row(token, ALL_SPECS, f, editing, edit_error if editing else None, edit_content_override if editing else None))
-        new_config_link = ""
-        upload_form = ""  # adding a brand-new file needs a specific target spec, not meaningful here
+        new_config_link = ""  # "+ New config" builds a specs/{code}_config.json key, so it needs one specific spec picked, not meaningful here
+        upload_form = render_upload_form(token, spec_value="")
     else:
         spec_files = sorted(groups.get(spec_code, []), key=lambda f: f['filename'])
 
@@ -1132,18 +1283,7 @@ def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_ov
             if spec_code and not has_config else ""
         )
 
-        upload_form = f"""
-  <form method="post" style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
-    <input type="hidden" name="token" value="{token_esc}">
-    <input type="hidden" name="view" value="files">
-    <input type="hidden" name="action" value="upload_new">
-    <input type="text" name="spec" value="{html_escape(spec_code)}" placeholder="Spec code" style="width:90px">
-    <input type="text" name="filename" placeholder="e.g. 17D_label.png (include spec code prefix)" style="width:280px">
-    <input type="hidden" name="content_b64" class="b64target">
-    <input type="file" class="fileInput" style="display:none">
-    <button type="button" class="btn replaceBtn">Choose file &amp; upload</button>
-  </form>
-"""
+        upload_form = render_upload_form(token, spec_value=spec_code)
 
     body = f"""
   {selector}
@@ -1152,8 +1292,8 @@ def render_files(token, groups, spec_code, edit_key, edit_error, edit_content_ov
   <div class="toolbar">{new_config_link}</div>
   {upload_form}
   <div class="wrap">
-  <table>
-    <thead><tr><th>File</th><th>Preview</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead>
+  <table id="filesTable">
+    <thead><tr><th data-col="0" class="sortable">File</th><th>Preview</th><th data-col="2" class="sortable">Size</th><th data-col="3" class="sortable">Modified</th><th>Actions</th></tr></thead>
     <tbody>
       {''.join(rows) if rows else '<tr><td colspan="5">No files for this spec yet.</td></tr>'}
     </tbody>

@@ -3,7 +3,8 @@
   "extract_fields": {
     "OrderNumber": "the value printed next to 'Номер партии:'",
     "PUC": "the value printed next to 'PUC/УКП:'",
-    "GGN": "the 13-digit value printed next to 'GGN/ГГН:'"
+    "GGN": "the 13-digit value printed next to 'GGN/ГГН:'",
+    "ManufactureDate": "the date printed next to 'Дата изготовления:', in dd.mm.yyyy format"
   },
   "field_checks": [
     {
@@ -15,6 +16,11 @@
       "field": "GGN",
       "name": "GGN",
       "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "ManufactureDate",
+      "name": "Manufacture date format",
+      "expected_pattern": "^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$"
     }
   ],
   "lookup_rules": [
@@ -26,6 +32,14 @@
       },
       "compare_attribute": "GGN",
       "compare_zone": "GGN"
+    }
+  ],
+  "date_freshness_checks": [
+    {
+      "name": "Manufacture date is recent",
+      "field": "ManufactureDate",
+      "date_format": "%d.%m.%Y",
+      "max_days_diff": 2
     }
   ]
 }

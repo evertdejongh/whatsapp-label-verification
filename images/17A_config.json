@@ -1,0 +1,95 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "Variety": null,
+    "AgriculturalProduceType": "the value printed next to 'Nama Pertanian :' / 'Agricultural Produce Type' heading (e.g. 'Anggur Hijau')",
+    "CountryOfOrigin": "the full value(s) printed next to 'Negara Asal :' / 'Country Of Origin' heading, including both the English and Malay text",
+    "ExporterBlock": "the full value printed next to 'Nama & Alamat Pengeksport:' / 'Exporter by Name & Address:' heading, including the GLN number",
+    "AgentCode": "the value printed next to the standalone 'Agent:' heading",
+    "ImporterName": "the company name portion only (not the address) of the value printed next to 'Nama & Alamat Pengimport:' / 'Importer Name & Address:' heading",
+    "ImporterAddress": "the address portion only (excluding the company name) of the value printed next to 'Nama & Alamat Pengimport:' / 'Importer Name & Address:' heading",
+    "PUC": null,
+    "GGN": "the 13-digit value printed next to 'GGN:' in the pack details row (near PUC/PHC/Orchard)",
+    "OriginField": "the value printed next to the standalone English-only 'Origin' heading in the bottom pack details row (near PUC/GGN/PHC/Orchard) -- NOT the 'Negara Asal / Country Of Origin' bilingual field near the top of the label"
+  },
+  "field_checks": [
+    {
+      "field": "CountryOfOrigin",
+      "name": "Country of Origin (English + Malay)",
+      "expected_pattern": "South\\s*Africa[\\s\\S]{0,20}Afrika\\s*Selatan"
+    },
+    {
+      "field": "ExporterBlock",
+      "name": "Exporter name, address and GLN",
+      "expected_pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD[\\s\\S]{0,20}26\\s+BELLA\\s+ROSA\\s+STREET[\\s\\S]{0,30}BELLVILLE[\\s\\S]{0,30}(SOUTH\\s+AFRICA[\\s\\S]{0,10}7530|7530[\\s\\S]{0,10}SOUTH\\s+AFRICA)[\\s\\S]{0,30}GLN:?\\s*6009644340002"
+    },
+    {
+      "field": "AgentCode",
+      "name": "Agent code printed"
+    },
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "OriginField",
+      "name": "Origin South Africa",
+      "expected_pattern": "South\\s*Africa"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    },
+    {
+      "name": "Variety group Malay translation",
+      "table": "whatsapp-variety-group",
+      "key": {
+        "VarietyGroupCode": "result:variety.VarietyGroupCode"
+      },
+      "compare_attribute": "Malaysian",
+      "compare_zone": "AgriculturalProduceType"
+    },
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Importer name matches agent code",
+      "table": "whatsapp-agent-addresses",
+      "key": {
+        "Code": "field:AgentCode"
+      },
+      "compare_attribute": "ImporterName",
+      "compare_zone": "ImporterName"
+    },
+    {
+      "name": "Importer address matches agent code",
+      "table": "whatsapp-agent-addresses",
+      "key": {
+        "Code": "field:AgentCode"
+      },
+      "compare_attribute": "AddressLines",
+      "compare_zone": "ImporterAddress",
+      "fuzzy_threshold": 0.85
+    }
+  ],
+  "size_prompt_checks": [
+    {
+      "name": "Size heading matches commodity",
+      "commodity_source": "result:variety.Commodity"
+    }
+  ]
+}

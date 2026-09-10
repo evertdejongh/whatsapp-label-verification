@@ -66,7 +66,7 @@
   "lookup_rules": [
     {
       "name": "Importer name/address valid",
-      "table": "whatsapp-india-addresses",
+      "table": "whatsapp-agent-addresses",
       "scan_match": {
         "match_fields": [
           {"source": "field:ImporterName", "attribute": "ImporterName", "fuzzy_min_score": 0.85},
@@ -77,7 +77,7 @@
     },
     {
       "name": "FSSAI License valid for address",
-      "table": "whatsapp-india-addresses",
+      "table": "whatsapp-agent-addresses",
       "key": {
         "Code": "result:importer.Code"
       },

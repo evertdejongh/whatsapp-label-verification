@@ -28,6 +28,7 @@ def normalize_key_text(value):
 REGION = "us-east-2"
 DEFAULT_XLSX_PATH = os.path.join(os.path.dirname(__file__), "..", "WhatsAppTables.xlsx")
 INDIA_ADDRESSES_XLSX_PATH = os.path.join(os.path.dirname(__file__), "extracted_indian_addresses.xlsx")
+AGENTS_XLSX_PATH = os.path.join(os.path.dirname(__file__), "Agents.xlsx")
 
 VARIETY_TABLE = "whatsapp-variety"
 VARIETY_GROUP_TABLE = "whatsapp-variety-group"
@@ -35,7 +36,23 @@ IAN_NUMBERS_TABLE = "whatsapp-ian-numbers"
 PUC_TABLE = "whatsapp-puc"
 COMMODITY_TABLE = "whatsapp-commodity"
 REWE_COMBINATIONS_TABLE = "whatsapp-rewe-combinations"
-INDIA_ADDRESSES_TABLE = "whatsapp-india-addresses"
+AGENT_ADDRESSES_TABLE = "whatsapp-agent-addresses"
+
+# Agent/importer codes are unique across every country that uses this table
+# (confirmed by the user), so one shared table + one flat "Code" key covers
+# all of them -- no need for a per-country namespace. Non-India rows come
+# from tools/Agents.xlsx (see sync_general_agents()) rather than being
+# hardcoded, now that a real source spreadsheet exists for them.
+#
+# One genuine cross-country code collision was found and resolved by the
+# user 2026-09-10: code "XX" existed in the India sheet as a duplicate of
+# "TA" (same company "SAMRIDDHI TRADE", same FSSAI -- a data-entry error in
+# the original India source, not a real second consignee) and *separately*
+# in Agents.xlsx as a real, different company ("PT. PARAHYANGAN SUKSES
+# FOODS", Indonesia). Resolution: the India loader below explicitly skips
+# "XX" (keeping only "TA" for Samriddhi Trade); Agents.xlsx's "XX" is the
+# real occupant of that code going forward.
+INDIA_DUPLICATE_CODES_TO_SKIP = {"XX"}
 
 # REWE (13A/13B/13C/13D) rule 6: which GTIN/supplier-code/bilingual-name/
 # packaging text is correct depends on Pack + VarietyGroup, except the
@@ -253,57 +270,104 @@ def sync_rewe_combinations():
     print(f"{REWE_COMBINATIONS_TABLE}: loaded {count} rows.")
 
 
-def sync_india_addresses(xlsx_path=INDIA_ADDRESSES_XLSX_PATH):
-    # 17C (India) rule (details pending): the consignee/agent code printed on
-    # the label must resolve to the correct name, 3-line address, and FSSAI
-    # license number. Loaded from a separate xlsx (not WhatsAppTables.xlsx)
-    # since it's India-specific reference data, not Dole-global.
+def split_name_and_address(address1, *rest_lines):
+    """
+    Some source sheets run the company's full legal name straight into the
+    first address line with no delimiter but a comma (e.g. "TENGINE SDN BHD,
+    LOT 2457," or "SAHAJ LAXMI TRADERS, SHOP NO 23, GROUND FLOOR,"). Splitting
+    at the first comma recovers a clean name for those rows -- the address
+    fragment left over (if any) joins the rest of the address lines instead
+    of staying glued to the name. Rows with no comma at all (Address1 is
+    already just the name) are returned whole, unchanged. This matters
+    because matching a name against the *whole* Address1 (name+address)
+    would score low for a genuinely correct short name against a long
+    combined string -- exactly the false-failure this split avoids. Shared
+    by both the India and general-agents loaders below (same source-data
+    shape, same fix).
+    """
+    name_part, _, addr1_remainder = address1.partition(",")
+    importer_name = name_part.strip()
+    address_lines = " ".join(p for p in [addr1_remainder.strip(), *rest_lines] if p)
+    return importer_name, address_lines
+
+
+def sync_agent_addresses(xlsx_path=INDIA_ADDRESSES_XLSX_PATH):
+    # Started as India-only (17C's consignee/agent code -> name, 3-line
+    # address, FSSAI license number), generalized 2026-09-10 once 17A
+    # (Malaysia) needed the exact same shape (agent code -> importer name +
+    # address) -- renamed from whatsapp-india-addresses to this generic name.
+    # The India rows come from a separate xlsx (not WhatsAppTables.xlsx,
+    # since it's not Dole-global); sync_general_agents() below loads the
+    # non-India rows from a second, separate sheet into the same table.
+    #
+    # Only ImporterName/AddressLines (the split results) and FSSAI are
+    # actually referenced by any validation config -- the raw Address1/
+    # Address2/Address3/FullAddress components aren't kept in the table at
+    # all, deliberately: this table is hand-editable via the dashboard's
+    # Reference Tables tab, and keeping unused raw fields alongside the
+    # derived ones they were split from would let someone edit one without
+    # the other, silently drifting the two out of sync.
     ensure_table(
-        INDIA_ADDRESSES_TABLE,
+        AGENT_ADDRESSES_TABLE,
         key_schema=[{"AttributeName": "Code", "KeyType": "HASH"}],
         attribute_definitions=[{"AttributeName": "Code", "AttributeType": "S"}],
     )
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
-    table = dynamodb.Table(INDIA_ADDRESSES_TABLE)
+    table = dynamodb.Table(AGENT_ADDRESSES_TABLE)
     count = 0
     with table.batch_writer(overwrite_by_pkeys=["Code"]) as batch:
         for r in rows(wb["Addresses"]):
-            address1 = str(r["Address1"]).strip()
+            code = normalize_key_text(r["Code"])
+            if code in INDIA_DUPLICATE_CODES_TO_SKIP:
+                continue
             address2 = str(r["Address2"]).strip()
             address3 = str(r["Inv: IndianAddress3"]).strip()
-            # Address1 doubles as the importer's name on this source sheet,
-            # but isn't cleanly split from the address on every row -- about
-            # a third of rows run the name straight into the first address
-            # line (e.g. "SAHAJ LAXMI TRADERS, SHOP NO 23, GROUND FLOOR,").
-            # Splitting at the first comma recovers a clean name for those
-            # rows (the address portion, if any, joins AddressLines); rows
-            # with no comma at all (Address1 is already just the name, or
-            # the one row that has neither a comma nor a clean split point)
-            # are left whole. This matters because matching a name against
-            # the *whole* Address1 (name+address) would score low for a
-            # genuinely correct short name against a long combined string --
-            # exactly the false-failure this split avoids.
-            # Only ImporterName/AddressLines (the split results) and FSSAI are
-            # actually referenced by 17C's validation config -- the raw
-            # Address1/Address2/Address3/FullAddress components aren't kept
-            # in the table at all, deliberately: this table is hand-editable
-            # via the dashboard's Reference Tables tab, and keeping unused
-            # raw fields alongside the derived ones they were split from
-            # would let someone edit one without the other, silently
-            # drifting the two out of sync.
-            name_part, _, addr1_remainder = address1.partition(",")
-            importer_name = name_part.strip()
-            addr1_remainder = addr1_remainder.strip()
+            importer_name, address_lines = split_name_and_address(str(r["Address1"]).strip(), address2, address3)
             item = {
-                "Code": normalize_key_text(r["Code"]),
+                "Code": code,
                 "ImporterName": importer_name,
-                "AddressLines": " ".join(p for p in [addr1_remainder, address2, address3] if p),
+                "AddressLines": address_lines,
             }
             if r.get("FSSAI"):
                 item["FSSAI"] = str(r["FSSAI"]).strip()
             batch.put_item(Item=item)
             count += 1
-    print(f"{INDIA_ADDRESSES_TABLE}: loaded {count} rows.")
+    print(f"{AGENT_ADDRESSES_TABLE}: loaded {count} India rows.")
+
+
+def sync_general_agents(xlsx_path=AGENTS_XLSX_PATH):
+    # Non-India agent/importer codes (Malaysia's 17A and onward) -- same
+    # table, same Code/ImporterName/AddressLines shape as the India loader
+    # above, just a different source sheet (Code/Customer/Address1-4, no
+    # FSSAI). "Customer" is a short internal nickname (e.g. "CHOP TONG"),
+    # not what's printed on a real label -- Address1 carries the full legal
+    # company name instead (confirmed against a real 17A photo: agent "5K"'s
+    # Address1 "T&T FRESH SDN BHD" is exactly what the label prints), so
+    # Address1 feeds ImporterName via the same split_name_and_address() used
+    # for India, not the Customer column.
+    ensure_table(
+        AGENT_ADDRESSES_TABLE,
+        key_schema=[{"AttributeName": "Code", "KeyType": "HASH"}],
+        attribute_definitions=[{"AttributeName": "Code", "AttributeType": "S"}],
+    )
+    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+    table = dynamodb.Table(AGENT_ADDRESSES_TABLE)
+    count = 0
+    with table.batch_writer(overwrite_by_pkeys=["Code"]) as batch:
+        for r in rows(wb["Agents"]):
+            address2 = str(r.get("Address2") or "").strip()
+            address3 = str(r.get("Address3") or "").strip()
+            address4 = str(r.get("Address4") or "").strip()
+            importer_name, address_lines = split_name_and_address(
+                str(r["Address1"]).strip(), address2, address3, address4
+            )
+            batch.put_item(Item={
+                "Code": normalize_key_text(r["Code"]),
+                "ImporterName": importer_name,
+                "AddressLines": address_lines,
+            })
+            count += 1
+    print(f"{AGENT_ADDRESSES_TABLE}: loaded {count} general-agent rows.")
 
 
 def main():
@@ -317,7 +381,8 @@ def main():
     sync_puc(wb)
     sync_commodity(wb)
     sync_rewe_combinations()
-    sync_india_addresses()
+    sync_agent_addresses()
+    sync_general_agents()
 
 
 if __name__ == "__main__":

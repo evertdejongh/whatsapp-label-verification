@@ -816,20 +816,33 @@ def generate_digit_confusion_variants(value, pairs=DIGIT_CONFUSION_PAIRS):
 # fixed per Commodity Code -- a stable, universal Dole business rule, not
 # per-shipment data, so it's kept as code rather than table-driven per the
 # 2026-09-03 decision. Commodity codes not covered by name fall to "Size:".
+# Corrected 2026-09-10 against the user's authoritative list after a real
+# 17A (Malaysia) orange label printed "Size Ref/Count:", not the previously
+# assumed "Size Ref/Size:" -- also fixed "BB" (not a real commodity code in
+# whatsapp-commodity) to "BI" (Blueberries) and added Strawberries (SB).
+# Each commodity maps to a list since some accept more than one valid
+# wording (e.g. Avocados' "Size Code:" or "Code:") -- a check passes if ANY
+# listed wording is found.
+#
+# Known deferred exception, not implemented: Oranges/Grapefruit/Lemons
+# should use "Size Ref" + "Diameter" instead when the pack is a bin AND
+# class is P -- expected_size_prompt() only receives Commodity today, not
+# pack type or class, so this conditional isn't wired up. Revisit if a real
+# bin/class-P label is seen.
 SIZE_PROMPT_BY_COMMODITY = {
-    "OR": "Size Ref/Size:", "GF": "Size Ref/Size:", "LE": "Size Ref/Size:",
-    "SC": "Size Ref:",
-    "GR": "Berry Size:",
-    "PL": "Size/Diameter:",
-    "NE": "Size/Count/Diameter:", "PE": "Size/Count/Diameter:",
-    "AC": "Size/Diameter:",
-    "BB": "Size:",
-    "AV": "Size/Mass Range:",
+    "OR": ["Size Ref/Count:"], "GF": ["Size Ref/Count:"], "LE": ["Size Ref/Count:"],
+    "SC": ["Size Ref:"],
+    "GR": ["Berry Size:"],
+    "PL": ["Size/Diameter:"],
+    "NE": ["Count/Size/Diameter:"], "PE": ["Count/Size/Diameter:"],
+    "AC": ["Size/Diameter:"],
+    "BI": ["Size:"], "SB": ["Size:"],
+    "AV": ["Size Code:", "Code:"],
 }
 
 
 def expected_size_prompt(commodity):
-    return SIZE_PROMPT_BY_COMMODITY.get((commodity or "").strip().upper(), "Size:")
+    return SIZE_PROMPT_BY_COMMODITY.get((commodity or "").strip().upper(), ["Size:"])
 
 
 def get_compare_text(source_name, zone_content, extracted_fields, text_blocks):
@@ -1932,9 +1945,16 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 failed_zones.append(f"{check_name} (Could not resolve commodity)")
                 continue
 
-            expected_prompt = expected_size_prompt(commodity_value)
-            if expected_prompt.upper() not in full_label_text.upper():
-                failed_zones.append(f"{check_name} (Expected prompt '{expected_prompt}', not found on label)")
+            # The trailing ":" is dropped often enough by Textract (a thin,
+            # easily-missed glyph, same class of loss as other punctuation
+            # already tolerated elsewhere in this file) that requiring it
+            # literally produced a false failure on a real, correctly-
+            # printed "Size Ref/Count" heading -- only the heading text
+            # itself needs to be present, not its trailing punctuation.
+            expected_prompts = expected_size_prompt(commodity_value)
+            if not any(p.upper().rstrip(':') in full_label_text.upper() for p in expected_prompts):
+                options = " or ".join(f"'{p}'" for p in expected_prompts)
+                failed_zones.append(f"{check_name} (Expected prompt {options}, not found on label)")
             else:
                 passed_zones += 1
                 passed_zone_names.append(check_name)
@@ -2016,35 +2036,36 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 passed_zones += 1
                 passed_zone_names.append(check_name)
 
-        # A printed date (e.g. Дата изготовления/production date) must be
+        # A printed date (e.g. Дата изготовления/production date) should be
         # recent -- within a configured number of days of today, in either
         # direction -- rather than compared against another printed field.
-        # Catches a stale/reused label rather than one freshly printed for
-        # this actual shipment. "Today" is UTC (matching the audit log's own
-        # timestamp convention elsewhere in this file); a 2-day tolerance
-        # comfortably absorbs any UTC/local timezone difference near a day
-        # boundary, so this doesn't need its own timezone handling.
+        # Meant to flag a stale/reused label rather than one freshly printed
+        # for this actual shipment. Deliberately a soft warning, not a fail
+        # (per user decision): unlike a format/lookup check, "how many days
+        # old is too old" is a judgment call worth a human glance rather
+        # than an automatic rejection. "Today" is UTC (matching the audit
+        # log's own timestamp convention elsewhere in this file); the
+        # tolerance is generous enough to absorb any UTC/local timezone
+        # difference near a day boundary, so this doesn't need its own
+        # timezone handling.
         for check in date_freshness_checks:
             check_name = check.get("name", "Date freshness check")
             date_format = check.get("date_format", "%d.%m.%Y")
             max_days_diff = check.get("max_days_diff", 2)
             value = extracted_fields.get(check.get("field"))
             if not value:
-                failed_zones.append(f"{check_name} (Missing / Empty)")
+                warnings.append(f"{check_name}: could not find a date on the label to check")
                 continue
             try:
                 parsed_date = datetime.strptime(str(value).strip(), date_format).date()
             except ValueError:
-                failed_zones.append(f"{check_name} (Could not parse '{value}' as a date)")
+                warnings.append(f"{check_name}: could not parse '{value}' as a date")
                 continue
             days_diff = abs((datetime.now(timezone.utc).date() - parsed_date).days)
             if days_diff > max_days_diff:
-                failed_zones.append(
-                    f"{check_name} ('{value}' is {days_diff} day(s) from today, expected within {max_days_diff})"
+                warnings.append(
+                    f"{check_name}: '{value}' is {days_diff} day(s) from today (expected within {max_days_diff}) -- please double-check"
                 )
-            else:
-                passed_zones += 1
-                passed_zone_names.append(check_name)
 
         # Numeric cross-check between printed weights/quantities (e.g. net +
         # tare + pallet base weight must equal the printed gross weight) --
@@ -2158,7 +2179,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             len(target_regions) + len(full_label_checks) + len(lookup_rules)
             + len(field_checks) + len(text_block_checks) + len(size_prompt_checks)
             + len(color_tag_checks) + len(allowed_variety_group_checks)
-            + len(date_comparison_checks) + len(date_freshness_checks) + len(arithmetic_checks) + len(field_equality_checks)
+            + len(date_comparison_checks) + len(arithmetic_checks) + len(field_equality_checks)
             + len(week_day_code_checks) + len(logo_checks)
         )
         passed_list_str = "\n".join([f"  - ✅ {pz}" for pz in passed_zone_names]) if passed_zone_names else "  - None"
