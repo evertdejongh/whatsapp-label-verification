@@ -3,14 +3,14 @@
   "extract_fields": {
     "PUC": null,
     "Variety": null,
-    "Pack": null,
+    "Pack": "the short alphanumeric pack code printed in the small grid of boxes near the top of the label, next to a 'Pack' heading (e.g. 'A05D') -- NOT the 'Inner Packaging' size description elsewhere on the label (e.g. '10x500g'), which is a different field",
     "InventoryCode": null,
-    "GrowerGGN": "the 13-digit GGN number printed directly next to the 'Grower:' heading -- there is a second, separate 13-digit GGN printed below the Packhouse address block; do not confuse the two",
+    "GrowerGGN": "the 13-digit GGN number printed directly next to the 'Grower:' heading -- do not confuse this with the Packhouse's own GGN (printed alongside/after the Packhouse address block -- often the same number, since Grower and Packhouse are frequently the same operation) or with the Supplier's registration number/GLN, which belongs to a completely different company",
     "Packhouse": null,
     "Key": null,
     "Brand": null,
     "BerrySize": "the value printed next to the 'Berry Size' heading (e.g. 'Regular', 'L')",
-    "PackhouseGGN": "the 13-digit GGN number printed directly below/after the Packhouse address block -- there is a separate GGN printed next to the 'Grower:' heading; do not confuse the two",
+    "PackhouseGGN": "the 13-digit GGN number printed alongside/immediately after the Packhouse's own address block (the facility named next to 'Packhouse:'). On some label layouts the Supplier's block is what appears directly below the Packhouse block -- do NOT use the Supplier's registration number/GLN there, that belongs to a different company. It is common for this to be identical to the Grower GGN when the grower and packhouse are the same operation",
     "IANNumber": "a standalone short numeric code (about 5 digits), usually printed near the top of the label close to a multi-language translation block -- NOT the long alphanumeric traceability code, and NOT the barcode number",
     "LidlProductNumber": "a long alphanumeric traceability/batch code (around 17 characters, mixing letters and digits, e.g. like 'GR007198BZA999808'), usually printed right after a shorter batch/lot code such as 'L36-04'",
     "BarcodeNumber": "the long numeric string printed directly with/under the barcode graphic itself"
@@ -95,7 +95,7 @@
     },
     {
       "name": "Supplier address",
-      "pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD,?\\s*26\\s+BELLA\\s+ROSA.{0,20}?,?\\s*BELLVILLE,?\\s*7530"
+      "pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD,?\\s*26\\s+BELLA\\s+ROSA.{0,20}?,?\\s*BELLVILLE,?[\\s\\S]{0,15}?7530"
     },
     {
       "name": "Importer heading",
@@ -103,7 +103,7 @@
     },
     {
       "name": "Importer address",
-      "pattern": "EUROPE\\s+GMBH\\s*[/7]?\\s*STADTDEICH"
+      "pattern": "EUROPE\\s+GMBH\\s*[/7I|]?\\s*STADTDE[IL]CH"
     },
     {
       "name": "Importer GLN",
