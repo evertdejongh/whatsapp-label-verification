@@ -89,7 +89,7 @@
     },
     {
       "name": "Exported by address",
-      "pattern": "EXPORTED\\s+BY\\s+DOLE\\s+SOUTH\\s+AFRICA\\s+PTY\\s*\\(LTD\\)\\s*[,.]?\\s*26\\s+BELLA\\s+ROSA.{0,20}?\\s*[,.]?\\s*BELLVILLE\\s*[,.]?\\s*7530\\s+SOUTH\\s+AFRICA\\s*[,.]?\\s*GLN\\s*:?\\s*6009644340002"
+      "pattern": "EXPORTED\\s+BY\\s*:?\\s*DOLE\\s+SOUTH\\s+AFRICA\\s+PTY\\s*\\(LTD\\)\\s*[,.]?\\s*26\\s+BELLA\\s+ROSA.{0,20}?\\s*[,.]?\\s*BELLVILLE\\s*[,.]?\\s*7530\\s+SOUTH\\s+AFRICA\\s*[,.]?\\s*GLN\\s*:?\\s*6009644340002"
     },
     {
       "name": "Imported by address",
@@ -119,10 +119,17 @@
       "name": "REWE NAN cross-check",
       "table": "whatsapp-rewe-combinations",
       "key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode",
+          "field:InventoryCode"
+        ]
       },
       "fallback_key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode"
+        ]
       },
       "compare_attribute": "ReweNanPUC",
       "compare_zone": "NAN"
@@ -131,10 +138,17 @@
       "name": "REWE GTIN cross-check",
       "table": "whatsapp-rewe-combinations",
       "key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode",
+          "field:InventoryCode"
+        ]
       },
       "fallback_key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode"
+        ]
       },
       "compare_attribute": "GTIN",
       "compare_zone": "GTIN"
@@ -143,10 +157,17 @@
       "name": "REWE Variety Group DE cross-check",
       "table": "whatsapp-rewe-combinations",
       "key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode",
+          "field:InventoryCode"
+        ]
       },
       "fallback_key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode"
+        ]
       },
       "compare_attribute": "VarietyGroupDE",
       "compare_zone": "VarietyGroupDE"
@@ -155,10 +176,17 @@
       "name": "REWE Variety Group EN cross-check",
       "table": "whatsapp-rewe-combinations",
       "key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode",
+          "field:InventoryCode"
+        ]
       },
       "fallback_key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode"
+        ]
       },
       "compare_attribute": "VarietyGroupEN",
       "compare_zone": "VarietyGroupEN"
@@ -167,10 +195,17 @@
       "name": "REWE Packaging cross-check",
       "table": "whatsapp-rewe-combinations",
       "key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode", "field:InventoryCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode",
+          "field:InventoryCode"
+        ]
       },
       "fallback_key": {
-        "lookup_key": ["field:Pack", "result:variety.VarietyGroupCode"]
+        "lookup_key": [
+          "field:Pack",
+          "result:variety.VarietyGroupCode"
+        ]
       },
       "compare_attribute": "REWEPackaging",
       "compare_zone": "REWEPackaging"

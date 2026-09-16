@@ -16,7 +16,7 @@
     {
       "field": "CountryOfOrigin",
       "name": "Country of Origin (English + Malay)",
-      "expected_pattern": "South\\s*Africa[\\s\\S]{0,20}Afrika\\s*Selatan"
+      "expected_pattern": "(?=[\\s\\S]*South\\s*Africa)(?=[\\s\\S]*Afrika\\s*Selatan)"
     },
     {
       "field": "ExporterBlock",

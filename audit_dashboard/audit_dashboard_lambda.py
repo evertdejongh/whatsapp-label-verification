@@ -773,7 +773,7 @@ def render_table_edit_row(token, table_name, key_attrs, item, columns, display_c
     return "<tr class='editing'>" + "".join(cells) + extra_cell + actions_cell + "</tr>"
 
 
-def render_tables(token, table_name, key_attrs, items, columns, display_columns, edit_item, adding_new, next_key, error):
+def render_tables(token, table_name, key_attrs, items, columns, display_columns, edit_item, adding_new, error):
     edit_key = {k: edit_item.get(k) for k in key_attrs} if edit_item else None
 
     rows = []
@@ -796,7 +796,7 @@ def render_tables(token, table_name, key_attrs, items, columns, display_columns,
     body = f"""
   {render_table_subnav(token, table_name)}
   <div class="toprow">
-    <div class="sub">{len(items)} row(s) shown from <b>{table_esc}</b> (page size {PAGE_SIZE}). Click a row to select it, then Edit or Delete.</div>
+    <div class="sub">{len(items)} row(s) in <b>{table_esc}</b>. Click a row to select it, then Edit or Delete.</div>
     <div class="toolbar">
       <a class="btn primary" href="?token={token_esc}&view=tables&table={table_esc}&edit=__new__">+ New</a>
       <a id="editBtn" class="btn disabled" href="#" data-href-base="?token={token_esc}&view=tables&table={table_esc}&edit=">Edit</a>
@@ -832,9 +832,6 @@ def render_tables(token, table_name, key_attrs, items, columns, display_columns,
   </table>
   </div>
 """
-    if next_key:
-        qs = f"?token={token_esc}&view=tables&table={table_esc}&last_key={html_escape(encode_key(next_key))}"
-        body += f"<a class='more' href='{qs}'>Load more &rarr;</a>"
 
     return page_shell(f"WhatsApp Label Verification - {table_name}", render_nav(token, 'tables'), body, extra_script=ROW_SELECT_SCRIPT)
 
@@ -844,16 +841,29 @@ def handle_tables_get(token, query_params):
     if table_name not in TABLE_REGISTRY:
         table_name = next(iter(TABLE_REGISTRY))
     key_attrs = TABLE_REGISTRY[table_name]
-    last_key = decode_key(query_params.get('last_key'))
 
     table = dynamodb.Table(table_name)
-    scan_kwargs = {'Limit': PAGE_SIZE}
-    if last_key:
-        scan_kwargs['ExclusiveStartKey'] = last_key
+    items = []
     try:
-        response = table.scan(**scan_kwargs)
+        # Every TABLE_REGISTRY table is bounded reference/master data (a
+        # finite real-world set of PUCs/varieties/etc, growing slowly), not
+        # an unbounded event stream like the audit log -- confirmed all
+        # comfortably under ~1,600 rows even for the largest (whatsapp-puc).
+        # So scan the whole table every time (same pattern as
+        # scan_spec_catalog()) instead of paginating it: a single Scan()
+        # can return far fewer items than asked for even when more exist,
+        # since DynamoDB also caps each Scan at 1MB of *scanned* data
+        # independent of item count -- confirmed live on whatsapp-puc, one
+        # Scan() call stopped at 132 of its 650 rows -- so a fixed-size
+        # "page" risked silently hiding real rows rather than just
+        # paginating them, and only fetching one page at a time also meant
+        # the click-to-sort/filter JS couldn't see rows sitting on a page
+        # that hadn't been loaded yet. Fetching everything sidesteps both.
+        response = table.scan()
         items = response.get('Items', [])
-        next_key = response.get('LastEvaluatedKey')
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            items += response.get('Items', [])
     except Exception as e:
         logger.error(f"Failed to scan {table_name}: {str(e)}")
         return text_response(500, f'Error loading {table_name}: {str(e)}')
@@ -878,7 +888,7 @@ def handle_tables_get(token, query_params):
             except Exception as e:
                 logger.error(f"Failed to load row for edit in {table_name}: {str(e)}")
 
-    html = render_tables(token, table_name, key_attrs, items, columns, display_columns, edit_item, adding_new, next_key, error=None)
+    html = render_tables(token, table_name, key_attrs, items, columns, display_columns, edit_item, adding_new, error=None)
     return html_response(html)
 
 

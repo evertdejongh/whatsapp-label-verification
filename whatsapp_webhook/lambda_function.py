@@ -42,6 +42,26 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 # dedicated reference photo of their own yet.
 LABEL_VARIANT_SUFFIXES = ["punnet", "punnet_mix", "33", "39", "5D", "WV", "XU", "YE", "Generic", "pallet"]
 
+# Shown on every real PASS/FAIL result (not on early exits like "wrong spec
+# code" or "config not found", where no actual layout check happened) --
+# this system verifies the label's printed layout/content against the spec,
+# it cannot verify the physical produce inside the box matches what the
+# label claims. That confirmation stays the packer's responsibility.
+LAYOUT_CHECK_DISCLAIMER = (
+    # A single line, deliberately -- WhatsApp's markdown doesn't apply
+    # *bold*/_italics_ across an internal line break, so a multi-line version
+    # of this rendered with the literal marker characters instead of
+    # formatted text. Emoji + bold (rather than the original plain italic)
+    # is so this doesn't just blend into the rest of the report. A row of
+    # emoji as a colored divider line was tried and dropped -- it wrapped
+    # unpredictably across phone screen widths instead of reading as a
+    # clean line, so the blank-line spacing the caller already adds is
+    # doing the visual separation instead.
+    "📌 *Please note: this approval is strictly for label layout and text "
+    "accuracy. Packhouse teams remain responsible for ensuring the physical "
+    "fruit meets the designated Pack Instruction specifications.*"
+)
+
 ssm = boto3.client('ssm', region_name=AWS_REGION)
 s3_client = boto3.client('s3', region_name=AWS_REGION)
 rekognition = boto3.client('rekognition', region_name=AWS_REGION)
@@ -1796,6 +1816,47 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                             # commodity just to look up a Variety).
                             partition_attr, partition_value = next(iter(key.items()))
                             found_items = table.query(KeyConditionExpression=Key(partition_attr).eq(partition_value)).get('Items', [])
+
+                            if not found_items:
+                                # A single-character vision misread on a long
+                                # name (e.g. "SHEEENE" for "SHEEGENE") has no
+                                # fixed confusion pattern to enumerate the way
+                                # a short numeric code does -- fuzzy-match the
+                                # whole table's names instead. Scoped to
+                                # query_mode only (currently just the Variety
+                                # table, ~600 rows, cheap to scan) since an
+                                # exact-key GetItem lookup already has its own
+                                # narrower digit-confusion retry below.
+                                try:
+                                    all_items = table.scan().get('Items', [])
+                                except Exception:
+                                    all_items = []
+                                target_norm = normalize_zone_text([str(partition_value)])
+                                best_name, best_score = None, 0.9
+                                for candidate in all_items:
+                                    candidate_name = str(candidate.get(partition_attr, ''))
+                                    if not candidate_name:
+                                        continue
+                                    score = difflib.SequenceMatcher(
+                                        None, normalize_zone_text([candidate_name]), target_norm
+                                    ).ratio()
+                                    if score > best_score:
+                                        best_score, best_name = score, candidate_name
+                                if best_name:
+                                    corrected_items = table.query(
+                                        KeyConditionExpression=Key(partition_attr).eq(best_name)
+                                    ).get('Items', [])
+                                    if corrected_items:
+                                        logger.info(
+                                            f"Lookup rule '{rule_name}' resolved via fuzzy name retry: "
+                                            f"{partition_value!r} -> {best_name!r} (score={best_score:.3f})"
+                                        )
+                                        warnings.append(
+                                            f"{rule_name}: only matched after correcting a likely misread "
+                                            f"('{partition_value}' -> '{best_name}') -- consider a sharper photo"
+                                        )
+                                        found_items = corrected_items
+                                        key = {partition_attr: best_name}
                         else:
                             single_item = table.get_item(Key=key).get('Item')
                             found_items = [single_item] if single_item else []
@@ -2201,7 +2262,6 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             + len(date_comparison_checks) + len(arithmetic_checks) + len(field_equality_checks)
             + len(week_day_code_checks) + len(logo_checks)
         )
-        passed_list_str = "\n".join([f"  - ✅ {pz}" for pz in passed_zone_names]) if passed_zone_names else "  - None"
         warnings_block = (
             f"• Warnings:\n" + "\n".join([f"  - ⚠️ {w}" for w in warnings]) + "\n"
         ) if warnings else ""
@@ -2216,9 +2276,9 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 f"• Spec Reference: *{spec_code}*\n"
                 f"{label_type_line}"
                 f"• Target Zones Checked: *{total_regions} blocks*\n"
-                f"• Passed Blocks:\n{passed_list_str}\n"
                 f"{warnings_block}\n"
-                f"_All required zones matched their expected content._"
+                f"_All required zones matched their expected content._\n\n"
+                f"{LAYOUT_CHECK_DISCLAIMER}"
             ), zone_content
         else:
             failed_list = "\n".join([f"  - ❌ {fz}" for fz in failed_zones])
@@ -2226,10 +2286,10 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 f"❌ *Layout Verification FAILED*\n\n"
                 f"• Spec Reference: *{spec_code}*\n"
                 f"{label_type_line}"
-                f"• Passed Blocks:\n{passed_list_str}\n"
                 f"• Failed Blocks:\n{failed_list}\n"
                 f"{warnings_block}\n"
-                f"_Please fill in the missing sections on the label._"
+                f"_Please correct invalid info and re-submit._\n\n"
+                f"{LAYOUT_CHECK_DISCLAIMER}"
             ), zone_content
 
     except Exception as e:
