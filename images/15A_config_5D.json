@@ -1,16 +1,27 @@
 {
   "layout_agnostic": true,
   "extract_fields": {
+    "CustomerCode": "the customer code printed in large bold font on the label (e.g. '5D')",
     "OrderNumber": "the value printed next to 'Номер партии:'",
+    "BarcodeReadable": "the value printed next to 'Бар код:'",
     "PUC": "the value printed next to 'PUC/УКП:'",
     "GGN": "the 13-digit value printed next to 'GGN/ГГН:'",
-    "ManufactureDate": "the date printed next to 'Дата изготовления:', in dd.mm.yyyy format"
+    "PackDate": "the date printed next to 'дата упаковки:', in dd/mm/yyyy format"
   },
   "field_checks": [
+    {
+      "field": "CustomerCode",
+      "name": "Customer code",
+      "expected_pattern": "^5D$"
+    },
     {
       "field": "OrderNumber",
       "name": "Order number format",
       "expected_pattern": "^.{4,}$"
+    },
+    {
+      "field": "BarcodeReadable",
+      "name": "Bar code printed"
     },
     {
       "field": "GGN",
@@ -18,9 +29,9 @@
       "expected_pattern": "\\b\\d{13}\\b"
     },
     {
-      "field": "ManufactureDate",
-      "name": "Manufacture date format",
-      "expected_pattern": "^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$"
+      "field": "PackDate",
+      "name": "Pack date format",
+      "expected_pattern": "^\\d{1,2}/\\d{1,2}/\\d{4}$"
     }
   ],
   "lookup_rules": [
@@ -36,9 +47,9 @@
   ],
   "date_freshness_checks": [
     {
-      "name": "Manufacture date is recent",
-      "field": "ManufactureDate",
-      "date_format": "%d.%m.%Y",
+      "name": "Pack date is recent",
+      "field": "PackDate",
+      "date_format": "%d/%m/%Y",
       "max_days_diff": 2
     }
   ]

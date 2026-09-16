@@ -34,11 +34,13 @@ GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 # Known secondary label types a spec can opt into (e.g. a punnet/retail-pack
-# label printed alongside the carton label for the same shipment). A spec
+# label printed alongside the carton label for the same shipment, or -- as
+# with 15A -- one carton design per destination agent/customer). A spec
 # opts in purely by uploading specs/{spec_code}_config_{suffix}.json and
 # specs/{spec_code}_label_{suffix}.png -- a spec with neither file behaves
-# exactly as before.
-LABEL_VARIANT_SUFFIXES = ["punnet", "punnet_mix", "2", "3", "4", "5", "pallet"]
+# exactly as before. "Generic" is 15A's fallback design for an agent with no
+# dedicated reference photo of their own yet.
+LABEL_VARIANT_SUFFIXES = ["punnet", "punnet_mix", "33", "39", "5D", "WV", "XU", "YE", "Generic", "pallet"]
 
 ssm = boto3.client('ssm', region_name=AWS_REGION)
 s3_client = boto3.client('s3', region_name=AWS_REGION)
@@ -711,6 +713,23 @@ def align_zone_locally(matcher, box, zone_name="", upscale=2, use_vision_llm=Fal
 
 def normalize_zone_text(lines):
     return re.sub(r'\s+', ' ', " ".join(lines).strip().upper())
+
+
+def strip_illegible_markers(text):
+    """
+    Removes '?' runs the vision LLM uses to mark characters it genuinely
+    couldn't read (see extract_label_fields/TEXT_BLOCK_PROMPT_TEMPLATE) --
+    used only when fuzzy-scoring a scan_match candidate, not general zone
+    normalization. A '?' means "unknown", not "definitely wrong": scoring it
+    as a literal mismatched character in a difflib ratio unfairly tanks an
+    otherwise-correct match by an amount that swings with how many '?'
+    characters the model happened to emit for one illegible word (observed
+    to vary call to call on the same photo), rather than by how much of the
+    label is actually unclear. Deliberately NOT applied to exact-pattern
+    checks elsewhere, where a genuinely illegible required field should
+    still fail outright.
+    """
+    return re.sub(r'\?+\s*', ' ', text).strip()
 
 
 ZONE_TOKEN_SPLIT_PATTERN = re.compile(r'\s*/\s*|\s+-\s+')
@@ -1679,7 +1698,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                     resolved_fields.append({
                         "attribute": mf.get("attribute"),
                         "min_score": mf.get("fuzzy_min_score", 0.6),
-                        "value_norm": normalize_zone_text([str(value)]).upper(),
+                        "value_norm": strip_illegible_markers(normalize_zone_text([str(value)]).upper()),
                     })
 
                 if unresolved:
@@ -2186,7 +2205,10 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
         warnings_block = (
             f"• Warnings:\n" + "\n".join([f"  - ⚠️ {w}" for w in warnings]) + "\n"
         ) if warnings else ""
-        label_type_line = f"• Label Type: *{variant_suffix.capitalize()}*\n" if variant_suffix else ""
+        # Shown verbatim, not .capitalize()'d -- that mangled agent-code
+        # suffixes like "5D"/"XU" (e.g. "5D" -> "5d"), and the raw suffix is
+        # exactly the identifier printed on the label itself.
+        label_type_line = f"• Label Type: *{variant_suffix}*\n" if variant_suffix else ""
 
         if not failed_zones and passed_zones == total_regions:
             return "PASS", (

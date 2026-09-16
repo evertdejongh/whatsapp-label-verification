@@ -5,8 +5,8 @@
     "ExporterAddress": "the value printed next to the 'ADDRESS:' heading directly below 'EXPORTER NAME:'",
     "PackerName": "the value printed next to the 'PACKER NAME:' heading",
     "PackerAddress": "the value printed next to the 'ADDRESS:' heading directly below 'PACKER NAME:'",
-    "ImporterName": "the value printed next to 'IMPORTER NAME :'",
-    "ImporterAddress": "the address lines printed next to '&' and 'ADDRESS:' beneath 'IMPORTER NAME :', combined into one block (do not include the importer name itself)",
+    "ImporterName": "the company name ONLY, printed next to 'IMPORTER NAME :'. Stop at whichever comes first: the next comma, or the '& ADDRESS:' line below it. Some labels run the name and address together on one line with no visual break before the first comma (e.g. 'IMPORTER NAME : ACME LTD, 12 Some Street...' -- name is only 'ACME LTD'); others cleanly break to a new '& ADDRESS:' line with no comma anywhere in the name itself (e.g. 'IMPORTER NAME : ACME COLD STORAGE' then '& ADDRESS:' below -- name is the full 'ACME COLD STORAGE', do not truncate it). Judge which case applies from what is actually printed before the '& ADDRESS:' line",
+    "ImporterAddress": "the complete importer address: everything that comes after the importer name (per the rule above) -- whether a fragment continuing on the same line as the name, or the full block starting at '& ADDRESS:' -- combined into one block (do not include the importer name itself)",
     "FSSAILicense": "the number printed next to 'FSSAI LICENSE NUMBER:'",
     "PackingDate": "the value printed next to 'Packing Date:'",
     "LotNumber": "the value printed next to 'Lot number/Code number/Batch number:'"
@@ -69,7 +69,7 @@
       "table": "whatsapp-agent-addresses",
       "scan_match": {
         "match_fields": [
-          {"source": "field:ImporterName", "attribute": "ImporterName", "fuzzy_min_score": 0.85},
+          {"source": "field:ImporterName", "attribute": "ImporterName", "fuzzy_min_score": 0.75},
           {"source": "field:ImporterAddress", "attribute": "AddressLines", "fuzzy_min_score": 0.6}
         ]
       },

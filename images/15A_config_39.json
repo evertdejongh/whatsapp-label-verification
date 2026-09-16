@@ -1,0 +1,51 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "CustomerCode": "the customer code printed in large bold font on the label (e.g. '39')",
+    "OrderNumber": "the value printed next to 'Номер партии:'",
+    "PUC": "the value printed next to 'PUC/УКП:'",
+    "GGN": "the 13-digit value printed next to 'GGN/ГГН:'",
+    "ManufactureDate": "the date printed next to 'Дата изготовления:', in dd.mm.yyyy format"
+  },
+  "field_checks": [
+    {
+      "field": "CustomerCode",
+      "name": "Customer code",
+      "expected_pattern": "^39$"
+    },
+    {
+      "field": "OrderNumber",
+      "name": "Order number format",
+      "expected_pattern": "^.{4,}$"
+    },
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "ManufactureDate",
+      "name": "Manufacture date format",
+      "expected_pattern": "^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    }
+  ],
+  "date_freshness_checks": [
+    {
+      "name": "Manufacture date is recent",
+      "field": "ManufactureDate",
+      "date_format": "%d.%m.%Y",
+      "max_days_diff": 2
+    }
+  ]
+}
