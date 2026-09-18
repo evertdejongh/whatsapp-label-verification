@@ -1322,6 +1322,22 @@ def resolve_lookup_value(value_spec, extracted_fields, config_data, rule_results
     return value_spec
 
 
+def humanize_allowed_pattern(pattern):
+    r"""Best-effort readable rendering of a simple allow-list regex like
+    '^L$' or '^(Regular|L|XL)$' -- returns None for anything else (a
+    format/shape check like GGN's r'\b\d{13}\b') rather than showing a raw
+    regex a packhouse team member can't parse."""
+    if not (pattern.startswith('^') and pattern.endswith('$')):
+        return None
+    inner = pattern[1:-1]
+    if inner.startswith('(') and inner.endswith(')'):
+        inner = inner[1:-1]
+    options = inner.split('|')
+    if options and all(re.fullmatch(r'[A-Za-z0-9 ]+', opt) for opt in options):
+        return ', '.join(options)
+    return None
+
+
 def evaluate_zone(user_lines, expected_pattern, compare_to_reference, expected_token_count, token_count_tolerance, ref_img, box):
     """
     Checks OCR'd lines for a zone against its configured requirements.
@@ -1606,7 +1622,9 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             if not value:
                 failed_zones.append(f"{check_name} (Missing / Empty)")
             elif pattern and not re.search(pattern, str(value), re.IGNORECASE):
-                failed_zones.append(f"{check_name} (Content Mismatch: found '{value}')")
+                allowed = humanize_allowed_pattern(pattern) if pattern else None
+                detail = f"found '{value}', allowed: {allowed}" if allowed else f"found '{value}'"
+                failed_zones.append(f"{check_name} (Content Mismatch: {detail})")
             else:
                 passed_zones += 1
                 passed_zone_names.append(check_name)
