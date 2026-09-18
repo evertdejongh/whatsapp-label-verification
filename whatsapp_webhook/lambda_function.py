@@ -1500,6 +1500,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
     date_freshness_checks = config_data.get('date_freshness_checks', [])
     arithmetic_checks = config_data.get('arithmetic_checks', [])
     field_equality_checks = config_data.get('field_equality_checks', [])
+    conditional_pattern_checks = config_data.get('conditional_pattern_checks', [])
     week_day_code_checks = config_data.get('week_day_code_checks', [])
     logo_checks = config_data.get('logo_checks', [])
     warning_checks = config_data.get('warning_checks', [])
@@ -1625,6 +1626,33 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 allowed = humanize_allowed_pattern(pattern) if pattern else None
                 detail = f"found '{value}', allowed: {allowed}" if allowed else f"found '{value}'"
                 failed_zones.append(f"{check_name} (Content Mismatch: {detail})")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
+        # Like field_checks, but which pattern applies depends on another
+        # extracted field's value -- e.g. 17A's Exporter block is normally
+        # Dole SA's own address, except for one specific agent code (YI)
+        # where the exporter is a different company entirely. The mapping
+        # lives in config (patterns_by_condition), keyed by the condition
+        # field's value uppercased/stripped; default_pattern covers every
+        # other/unlisted value so this degrades to a plain field_checks-style
+        # check when the condition field is absent or unrecognized.
+        for check in conditional_pattern_checks:
+            check_name = check.get("name", "Conditional check")
+            field_name = check.get("field")
+            value = extracted_fields.get(field_name)
+            condition_value = extracted_fields.get(check.get("condition_field"))
+            pattern = None
+            if condition_value:
+                pattern = check.get("patterns_by_condition", {}).get(str(condition_value).strip().upper())
+            if not pattern:
+                pattern = check.get("default_pattern")
+
+            if not value:
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+            elif pattern and not re.search(pattern, str(value), re.IGNORECASE):
+                failed_zones.append(f"{check_name} (Content Mismatch: found '{value}')")
             else:
                 passed_zones += 1
                 passed_zone_names.append(check_name)
@@ -2278,7 +2306,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             + len(field_checks) + len(text_block_checks) + len(size_prompt_checks)
             + len(color_tag_checks) + len(allowed_variety_group_checks)
             + len(date_comparison_checks) + len(arithmetic_checks) + len(field_equality_checks)
-            + len(week_day_code_checks) + len(logo_checks)
+            + len(week_day_code_checks) + len(logo_checks) + len(conditional_pattern_checks)
         )
         warnings_block = (
             f"• Warnings:\n" + "\n".join([f"  - ⚠️ {w}" for w in warnings]) + "\n"
