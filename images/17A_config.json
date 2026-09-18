@@ -19,11 +19,6 @@
       "expected_pattern": "(?=[\\s\\S]*South\\s*Africa)(?=[\\s\\S]*Afrika\\s*Selatan)"
     },
     {
-      "field": "ExporterBlock",
-      "name": "Exporter name, address and GLN",
-      "expected_pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD[\\s\\S]{0,20}26\\s+BELLA\\s+ROSA\\s+STREET[\\s\\S]{0,30}BELLVILLE[\\s\\S]{0,30}(SOUTH\\s+AFRICA[\\s\\S]{0,10}7530|7530[\\s\\S]{0,10}SOUTH\\s+AFRICA)[\\s\\S]{0,30}GLN:?\\s*6009644340002"
-    },
-    {
       "field": "AgentCode",
       "name": "Agent code printed"
     },
@@ -90,6 +85,17 @@
     {
       "name": "Size heading matches commodity",
       "commodity_source": "result:variety.Commodity"
+    }
+  ],
+  "conditional_pattern_checks": [
+    {
+      "name": "Exporter name, address and GLN",
+      "field": "ExporterBlock",
+      "condition_field": "AgentCode",
+      "patterns_by_condition": {
+        "YI": "SOUTHERN\\s+FRUIT\\s+TRADING\\s*\\(PTY\\)\\s*LTD[\\s\\S]{0,20}CARL\\s+CRONJE\\s+DRIVE[\\s\\S]{0,30}TYGER\\s+QUAYS\\s+UNIT\\s*2[\\s\\S]{0,30}TYGER\\s+WATER\\s*FRONT[\\s\\S]{0,30}BELLVILLE[\\s\\S]{0,20}7530"
+      },
+      "default_pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD[\\s\\S]{0,20}26\\s+BELLA\\s+ROSA\\s+STREET[\\s\\S]{0,30}BELLVILLE[\\s\\S]{0,30}(SOUTH\\s+AFRICA[\\s\\S]{0,10}7530|7530[\\s\\S]{0,10}SOUTH\\s+AFRICA)[\\s\\S]{0,30}GLN:?\\s*6009644340002"
     }
   ]
 }
