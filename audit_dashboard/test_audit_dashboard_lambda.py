@@ -431,5 +431,95 @@ class ReferenceTablesJsonTests(unittest.TestCase):
         self.assertEqual('text/html; charset=utf-8', response['headers']['Content-Type'])
 
 
+class SpecFilesJsonTests(unittest.TestCase):
+    """format_='json' is consumed by DoleFrontEnd's Label Verification ->
+    Spec Files page -- same S3 list/get/put/delete calls as the HTML
+    dashboard, just serialized instead of rendered."""
+
+    def setUp(self):
+        self.s3 = Mock()
+        self.s3_patch = patch.object(dashboard, 's3_client', self.s3)
+        self.s3_patch.start()
+        self.addCleanup(self.s3_patch.stop)
+
+        self.dynamodb = Mock()
+        self.dynamodb.Table.return_value.scan.return_value = {'Items': []}
+        self.dynamodb_patch = patch.object(dashboard, 'dynamodb', self.dynamodb)
+        self.dynamodb_patch.start()
+        self.addCleanup(self.dynamodb_patch.stop)
+
+    def test_get_json_returns_groups_with_preview_urls(self):
+        self.s3.list_objects_v2.return_value = {
+            'Contents': [
+                {'Key': 'specs/17C_label.png', 'Size': 2048, 'LastModified': 'x'},
+                {'Key': 'specs/17C_config.json', 'Size': 512, 'LastModified': 'x'},
+            ],
+        }
+        response = dashboard.handle_files_get('token', {}, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        self.assertEqual('application/json', response['headers']['Content-Type'])
+        body = json.loads(response['body'])
+        files = body['groups']['17C']
+        png = next(f for f in files if f['filename'] == '17C_label.png')
+        cfg = next(f for f in files if f['filename'] == '17C_config.json')
+        self.assertIsNotNone(png['preview_url'])
+        self.assertFalse(png['is_json'])
+        self.assertIsNone(cfg['preview_url'])
+        self.assertTrue(cfg['is_json'])
+
+    def test_get_json_content_key_returns_file_contents(self):
+        self.s3.get_object.return_value = {'Body': Mock(read=lambda: b'{"a": 1}')}
+        response = dashboard.handle_files_get('token', {'content_key': 'specs/17C_config.json'}, format_='json')
+
+        body = json.loads(response['body'])
+        self.assertEqual('{"a": 1}', body['content'])
+
+    def test_get_json_content_key_missing_returns_empty_string(self):
+        class FakeNoSuchKey(Exception):
+            pass
+        self.s3.exceptions.NoSuchKey = FakeNoSuchKey
+        self.s3.get_object.side_effect = FakeNoSuchKey()
+        response = dashboard.handle_files_get('token', {'content_key': 'specs/missing.json'}, format_='json')
+
+        body = json.loads(response['body'])
+        self.assertEqual('', body['content'])
+
+    def test_delete_json_returns_success(self):
+        form = {'action': ['delete'], 'spec': ['17C'], 'key': ['specs/17C_label.png']}
+        response = dashboard.handle_files_post('token', form, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        self.assertTrue(json.loads(response['body'])['success'])
+        self.s3.delete_object.assert_called_once_with(Bucket=dashboard.SPEC_BUCKET_NAME, Key='specs/17C_label.png')
+
+    def test_upload_json_missing_file_returns_400(self):
+        form = {'action': ['upload_new'], 'spec': ['14C'], 'filename': ['14C_label.png'], 'content_b64': ['']}
+        response = dashboard.handle_files_post('token', form, format_='json')
+
+        self.assertEqual(400, response['statusCode'])
+        self.s3.put_object.assert_not_called()
+
+    def test_save_json_valid_returns_success(self):
+        form = {'action': ['save_json'], 'spec': ['17C'], 'key': ['specs/17C_config.json'], 'content': ['{"a": 1}']}
+        response = dashboard.handle_files_post('token', form, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        self.assertTrue(json.loads(response['body'])['success'])
+
+    def test_save_json_invalid_returns_400_and_does_not_write(self):
+        form = {'action': ['save_json'], 'spec': ['17C'], 'key': ['specs/17C_config.json'], 'content': ['{not valid']}
+        response = dashboard.handle_files_post('token', form, format_='json')
+
+        self.assertEqual(400, response['statusCode'])
+        self.assertIn('Invalid JSON', json.loads(response['body'])['error'])
+        self.s3.put_object.assert_not_called()
+
+    def test_html_format_unaffected(self):
+        self.s3.list_objects_v2.return_value = {'Contents': []}
+        response = dashboard.handle_files_get('token', {}, format_=None)
+        self.assertEqual('text/html; charset=utf-8', response['headers']['Content-Type'])
+
+
 if __name__ == '__main__':
     unittest.main()

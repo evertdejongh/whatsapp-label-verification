@@ -1400,7 +1400,46 @@ def load_spec_descriptions():
         return {}
 
 
-def handle_files_get(token, query_params):
+def handle_files_get(token, query_params, format_=None):
+    if format_ == 'json':
+        # A single JSON config's content is fetched on demand (not bundled
+        # into the listing below) -- configs can run to hundreds of lines
+        # each and are only ever needed one at a time, when the admin
+        # actually opens that file's editor.
+        content_key = query_params.get('content_key', '').strip()
+        if content_key:
+            try:
+                content = s3_client.get_object(Bucket=SPEC_BUCKET_NAME, Key=content_key)['Body'].read().decode('utf-8')
+                return json_response({'content': content})
+            except s3_client.exceptions.NoSuchKey:
+                return json_response({'content': ''})
+            except Exception as e:
+                logger.error(f"Failed to load {content_key}: {str(e)}")
+                return json_response({'error': str(e)}, status=500)
+
+        try:
+            files = list_spec_files()
+        except Exception as e:
+            logger.error(f"Failed to list spec files: {str(e)}")
+            return json_response({'error': str(e)}, status=500)
+
+        json_groups = {}
+        for code, items in group_spec_files(files).items():
+            json_items = []
+            for f in items:
+                filename = f['filename']
+                is_previewable = filename.lower().endswith(('.png', '.jpg', '.jpeg', '.pdf'))
+                json_items.append({
+                    'key': f['key'],
+                    'filename': filename,
+                    'size': f['size'],
+                    'last_modified': f['last_modified'],
+                    'is_json': filename.endswith('.json'),
+                    'preview_url': get_presigned_url(f['key']) if is_previewable else None,
+                })
+            json_groups[code] = json_items
+        return json_response({'groups': json_groups, 'descriptions': load_spec_descriptions()})
+
     try:
         files = list_spec_files()
     except Exception as e:
@@ -1420,7 +1459,7 @@ def handle_files_get(token, query_params):
     return html_response(html)
 
 
-def handle_files_post(token, form):
+def handle_files_post(token, form, format_=None):
     action = form.get('action', [''])[0]
     spec_code = form.get('spec', [''])[0].strip()
     files_qs = f"?token={urllib.parse.quote(token)}&view=files"
@@ -1434,6 +1473,10 @@ def handle_files_post(token, form):
                 s3_client.delete_object(Bucket=SPEC_BUCKET_NAME, Key=key)
             except Exception as e:
                 logger.error(f"Failed to delete {key}: {str(e)}")
+                if format_ == 'json':
+                    return json_response({'error': str(e)}, status=500)
+        if format_ == 'json':
+            return json_response({'success': True})
         return redirect_response(files_qs)
 
     if action in ('upload', 'upload_new'):
@@ -1460,6 +1503,8 @@ def handle_files_post(token, form):
                 upload_error = f"Upload failed: {str(e)}"
 
         if upload_error:
+            if format_ == 'json':
+                return json_response({'error': upload_error}, status=400)
             # A silent no-op here (the original behavior) is exactly what
             # produced the bug this replaced: a blank/failed upload just
             # redirected back to an unchanged page with no indication
@@ -1475,6 +1520,8 @@ def handle_files_post(token, form):
             )
             return html_response(html)
 
+        if format_ == 'json':
+            return json_response({'success': True, 'key': key})
         return redirect_response(files_qs)
 
     if action == 'save_json':
@@ -1484,6 +1531,8 @@ def handle_files_post(token, form):
             json.loads(content)
             s3_client.put_object(Bucket=SPEC_BUCKET_NAME, Key=key, Body=content.encode('utf-8'), ContentType='application/json')
         except json.JSONDecodeError as e:
+            if format_ == 'json':
+                return json_response({'error': f'Invalid JSON: {str(e)}'}, status=400)
             try:
                 files = list_spec_files()
             except Exception:
@@ -1496,7 +1545,14 @@ def handle_files_post(token, form):
             return html_response(html)
         except Exception as e:
             logger.error(f"Failed to save {key}: {str(e)}")
+            if format_ == 'json':
+                return json_response({'error': str(e)}, status=500)
+        if format_ == 'json':
+            return json_response({'success': True})
         return redirect_response(files_qs)
+
+    if format_ == 'json':
+        return json_response({'error': f'Unknown action: {action}'}, status=400)
 
     return redirect_response(files_qs)
 
@@ -1562,8 +1618,8 @@ def lambda_handler(event, context):
             return handle_tables_get(token, query_params, format_=format_)
         elif view == 'files':
             if http_method == 'POST':
-                return handle_files_post(token, form)
-            return handle_files_get(token, query_params)
+                return handle_files_post(token, form, format_=format_)
+            return handle_files_get(token, query_params, format_=format_)
         else:
             return handle_audit_log(token, query_params, format_=format_)
     except Exception as e:
