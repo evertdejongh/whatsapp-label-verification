@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import sys
 import types
@@ -290,6 +291,144 @@ class SpecFilesTests(unittest.TestCase):
         self.s3.put_object.assert_not_called()
         self.assertEqual(200, response['statusCode'])
         self.assertIn('Invalid JSON', response['body'])
+
+
+class AuditLogJsonTests(unittest.TestCase):
+    """format_='json' is consumed by DoleFrontEnd's Label Verification
+    section -- same handler, same DynamoDB query, just serialized instead of
+    rendered into the HTML dashboard."""
+
+    def setUp(self):
+        self.table = Mock()
+        self.dynamodb = Mock()
+        self.dynamodb.Table.return_value = self.table
+        self.dynamodb_patch = patch.object(dashboard, 'dynamodb', self.dynamodb)
+        self.dynamodb_patch.start()
+        self.addCleanup(self.dynamodb_patch.stop)
+
+    def test_json_format_returns_items_counts_and_next_key(self):
+        self.table.query.return_value = {
+            'Items': [
+                {
+                    'timestamp': '2026-09-17T05:37:59.356974+00:00',
+                    'sender': '27833801959',
+                    'sender_name': 'Evert',
+                    'msg_type': 'image',
+                    'spec_code': '15A',
+                    'result': 'FAIL',
+                    'detail': 'some detail',
+                    'image_key': 'incoming/some.jpg',
+                },
+            ],
+            'LastEvaluatedKey': {'record_type': 'REQUEST', 'timestamp': 'x'},
+        }
+        response = dashboard.handle_audit_log('token', {}, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        self.assertEqual('application/json', response['headers']['Content-Type'])
+        body = json.loads(response['body'])
+        self.assertEqual(1, len(body['items']))
+        self.assertEqual('15A', body['items'][0]['spec_code'])
+        self.assertEqual({'FAIL': 1}, body['counts'])
+        self.assertIsNotNone(body['next_key'])
+
+    def test_json_format_omits_next_key_on_last_page(self):
+        self.table.query.return_value = {'Items': []}
+        response = dashboard.handle_audit_log('token', {}, format_='json')
+        body = json.loads(response['body'])
+        self.assertIsNone(body['next_key'])
+
+    def test_html_format_unaffected(self):
+        self.table.query.return_value = {'Items': []}
+        response = dashboard.handle_audit_log('token', {}, format_=None)
+        self.assertEqual('text/html; charset=utf-8', response['headers']['Content-Type'])
+
+
+class ReferenceTablesJsonTests(unittest.TestCase):
+    """format_='json' is consumed by DoleFrontEnd's Label Verification ->
+    Reference Tables page -- same scan/put_item/delete_item logic as the
+    HTML dashboard, just serialized instead of rendered."""
+
+    def setUp(self):
+        self.table = Mock()
+        self.dynamodb = Mock()
+        self.dynamodb.Table.return_value = self.table
+        self.dynamodb_patch = patch.object(dashboard, 'dynamodb', self.dynamodb)
+        self.dynamodb_patch.start()
+        self.addCleanup(self.dynamodb_patch.stop)
+
+    def test_get_json_returns_items_and_schema(self):
+        self.table.scan.return_value = {'Items': [{'PUC': 'A1030', 'GGN': '4052852937450'}]}
+        response = dashboard.handle_tables_get('token', {'table': 'whatsapp-puc'}, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        self.assertEqual('application/json', response['headers']['Content-Type'])
+        body = json.loads(response['body'])
+        self.assertEqual('whatsapp-puc', body['table'])
+        self.assertEqual(['PUC'], body['key_attrs'])
+        self.assertIn('whatsapp-variety', body['available_tables'])
+        self.assertEqual([{'PUC': 'A1030', 'GGN': '4052852937450'}], body['items'])
+
+    def test_get_json_defaults_to_first_table_when_unknown(self):
+        self.table.scan.return_value = {'Items': []}
+        response = dashboard.handle_tables_get('token', {'table': 'not-a-real-table'}, format_='json')
+        body = json.loads(response['body'])
+        self.assertEqual(next(iter(dashboard.TABLE_REGISTRY)), body['table'])
+
+    def test_save_json_writes_item_and_returns_success(self):
+        form = {
+            'table': ['whatsapp-puc'],
+            'action': ['save'],
+            'col::PUC': ['A1030'],
+            'col::GGN': ['4052852937450'],
+        }
+        response = dashboard.handle_tables_post('token', form, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        body = json.loads(response['body'])
+        self.assertTrue(body['success'])
+        self.table.put_item.assert_called_once_with(Item={'PUC': 'A1030', 'GGN': '4052852937450'})
+
+    def test_save_json_missing_key_returns_400_and_does_not_write(self):
+        form = {
+            'table': ['whatsapp-variety'],
+            'action': ['save'],
+            'col::VarietyName': ['SUGRA35'],
+            'col::Commodity': [''],
+        }
+        response = dashboard.handle_tables_post('token', form, format_='json')
+
+        self.assertEqual(400, response['statusCode'])
+        self.table.put_item.assert_not_called()
+
+    def test_delete_json_builds_key_from_col_fields(self):
+        form = {
+            'table': ['whatsapp-puc'],
+            'action': ['delete'],
+            'col::PUC': ['A1030'],
+        }
+        response = dashboard.handle_tables_post('token', form, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        body = json.loads(response['body'])
+        self.assertTrue(body['success'])
+        self.table.delete_item.assert_called_once_with(Key={'PUC': 'A1030'})
+
+    def test_delete_json_missing_key_returns_400_and_does_not_delete(self):
+        form = {
+            'table': ['whatsapp-puc'],
+            'action': ['delete'],
+            'col::PUC': [''],
+        }
+        response = dashboard.handle_tables_post('token', form, format_='json')
+
+        self.assertEqual(400, response['statusCode'])
+        self.table.delete_item.assert_not_called()
+
+    def test_html_format_unaffected(self):
+        self.table.scan.return_value = {'Items': []}
+        response = dashboard.handle_tables_get('token', {'table': 'whatsapp-puc'}, format_=None)
+        self.assertEqual('text/html; charset=utf-8', response['headers']['Content-Type'])
 
 
 if __name__ == '__main__':

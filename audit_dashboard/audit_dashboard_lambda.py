@@ -426,7 +426,7 @@ def render_audit_log(items, counts, filters, next_key):
     return page_shell("WhatsApp Label Verification - Audit Log", render_nav(filters['token'], 'audit'), body)
 
 
-def handle_audit_log(token, query_params):
+def handle_audit_log(token, query_params, format_=None):
     sender_filter = query_params.get('sender', '').strip()
     result_filter = query_params.get('result', '').strip()
     last_key = decode_key(query_params.get('last_key'))
@@ -465,12 +465,38 @@ def handle_audit_log(token, query_params):
         next_key = response.get('LastEvaluatedKey')
     except Exception as e:
         logger.error(f"Failed to query audit table: {str(e)}")
+        if format_ == 'json':
+            return json_response({'error': str(e)}, status=500)
         return text_response(500, f'Error querying audit log: {str(e)}')
 
     counts = {}
     for item in items:
         r = item.get('result', 'UNKNOWN')
         counts[r] = counts.get(r, 0) + 1
+
+    if format_ == 'json':
+        # Consumed by DoleFrontEnd's Label Verification section -- same data
+        # this handler has always fetched, just serialized instead of
+        # rendered into the HTML dashboard's table. Presigned image URLs are
+        # generated the same way render_audit_log's thumbnails already are,
+        # just carried as a field instead of an <img> tag.
+        json_items = []
+        for item in items:
+            json_items.append({
+                'timestamp': item.get('timestamp', ''),
+                'sender': format_sender(item.get('sender', '')),
+                'sender_name': item.get('sender_name', ''),
+                'msg_type': item.get('msg_type', ''),
+                'spec_code': item.get('spec_code', ''),
+                'result': item.get('result', ''),
+                'detail': item.get('detail', ''),
+                'image_url': get_presigned_url(item.get('image_key')),
+            })
+        return json_response({
+            'items': json_items,
+            'counts': counts,
+            'next_key': encode_key(next_key) if next_key else None,
+        })
 
     html = render_audit_log(
         items,
@@ -836,7 +862,7 @@ def render_tables(token, table_name, key_attrs, items, columns, display_columns,
     return page_shell(f"WhatsApp Label Verification - {table_name}", render_nav(token, 'tables'), body, extra_script=ROW_SELECT_SCRIPT)
 
 
-def handle_tables_get(token, query_params):
+def handle_tables_get(token, query_params, format_=None):
     table_name = query_params.get('table', '').strip()
     if table_name not in TABLE_REGISTRY:
         table_name = next(iter(TABLE_REGISTRY))
@@ -866,6 +892,8 @@ def handle_tables_get(token, query_params):
             items += response.get('Items', [])
     except Exception as e:
         logger.error(f"Failed to scan {table_name}: {str(e)}")
+        if format_ == 'json':
+            return json_response({'error': str(e)}, status=500)
         return text_response(500, f'Error loading {table_name}: {str(e)}')
 
     columns = list(key_attrs)
@@ -874,6 +902,16 @@ def handle_tables_get(token, query_params):
             if k not in columns:
                 columns.append(k)
     display_columns = [c for c in columns if c not in HIDDEN_TABLE_COLUMNS]
+
+    if format_ == 'json':
+        return json_response({
+            'table': table_name,
+            'available_tables': list(TABLE_REGISTRY.keys()),
+            'key_attrs': key_attrs,
+            'columns': columns,
+            'display_columns': display_columns,
+            'items': items,
+        })
 
     edit_item = None
     adding_new = False
@@ -892,9 +930,11 @@ def handle_tables_get(token, query_params):
     return html_response(html)
 
 
-def handle_tables_post(token, form):
+def handle_tables_post(token, form, format_=None):
     table_name = form.get('table', [''])[0]
     if table_name not in TABLE_REGISTRY:
+        if format_ == 'json':
+            return json_response({'error': f'Unknown table: {table_name}'}, status=400)
         return redirect_response(f"?token={urllib.parse.quote(token)}&view=tables")
     key_attrs = TABLE_REGISTRY[table_name]
     action = form.get('action', [''])[0]
@@ -902,12 +942,27 @@ def handle_tables_post(token, form):
     table_qs = f"?token={urllib.parse.quote(token)}&view=tables&table={urllib.parse.quote(table_name)}"
 
     if action == 'delete':
-        row_key = decode_key(form.get('row_key', [''])[0])
-        if row_key:
+        # The HTML UI identifies the row to delete via an opaque encode_key()
+        # token (base64'd JSON built server-side when rendering each row). A
+        # JSON caller doesn't have that token lying around, so it sends the
+        # key attributes directly as the same col::<name> fields used for
+        # save -- both paths land on the same DynamoDB Key dict either way.
+        if format_ == 'json':
+            row_key = {k: form.get(f'col::{k}', [''])[0] for k in key_attrs}
+        else:
+            row_key = decode_key(form.get('row_key', [''])[0])
+        if row_key and all(row_key.values()):
             try:
                 table.delete_item(Key=row_key)
             except Exception as e:
                 logger.error(f"Failed to delete row from {table_name}: {str(e)}")
+                if format_ == 'json':
+                    return json_response({'error': str(e)}, status=500)
+                return redirect_response(table_qs)
+        elif format_ == 'json':
+            return json_response({'error': 'Missing required key field(s)'}, status=400)
+        if format_ == 'json':
+            return json_response({'success': True})
         return redirect_response(table_qs)
 
     if action == 'save':
@@ -932,9 +987,18 @@ def handle_tables_post(token, form):
                 table.put_item(Item=item)
             except Exception as e:
                 logger.error(f"Failed to save row in {table_name}: {str(e)}")
+                if format_ == 'json':
+                    return json_response({'error': str(e)}, status=500)
+                return redirect_response(table_qs)
+        elif format_ == 'json':
+            return json_response({'error': 'Missing required key field(s)'}, status=400)
 
+        if format_ == 'json':
+            return json_response({'success': True, 'item': item})
         return redirect_response(table_qs)
 
+    if format_ == 'json':
+        return json_response({'error': f'Unknown action: {action}'}, status=400)
     return redirect_response(table_qs)
 
 
@@ -1449,6 +1513,10 @@ def text_response(status, text):
     return {'statusCode': status, 'headers': {'Content-Type': 'text/plain'}, 'body': text}
 
 
+def json_response(data, status=200):
+    return {'statusCode': status, 'headers': {'Content-Type': 'application/json'}, 'body': json.dumps(data, default=str)}
+
+
 def redirect_response(location):
     return {'statusCode': 303, 'headers': {'Location': location}, 'body': ''}
 
@@ -1470,11 +1538,17 @@ def lambda_handler(event, context):
         form = parse_form_body(event)
         token = form.get('token', [''])[0]
         view = form.get('view', ['audit'])[0]
+        format_ = form.get('format', [''])[0]
     else:
         token = query_params.get('token', '')
         view = query_params.get('view', 'audit')
+        format_ = query_params.get('format', '')
 
     if not dashboard_token or token != dashboard_token:
+        # A JSON caller (DoleFrontEnd) wants a JSON error, not this HTML
+        # dashboard's plain-text message meant for a human pasting a URL.
+        if format_ == 'json':
+            return json_response({'error': 'Unauthorized'}, status=401)
         return text_response(401, 'Unauthorized. Append ?token=<your dashboard token> to the URL.')
 
     try:
@@ -1484,14 +1558,16 @@ def lambda_handler(event, context):
             return handle_catalog_get(token, query_params)
         elif view == 'tables':
             if http_method == 'POST':
-                return handle_tables_post(token, form)
-            return handle_tables_get(token, query_params)
+                return handle_tables_post(token, form, format_=format_)
+            return handle_tables_get(token, query_params, format_=format_)
         elif view == 'files':
             if http_method == 'POST':
                 return handle_files_post(token, form)
             return handle_files_get(token, query_params)
         else:
-            return handle_audit_log(token, query_params)
+            return handle_audit_log(token, query_params, format_=format_)
     except Exception as e:
         logger.error(f"Unhandled error in dashboard: {str(e)}", exc_info=True)
+        if format_ == 'json':
+            return json_response({'error': str(e)}, status=500)
         return text_response(500, f'Unexpected error: {str(e)}')
