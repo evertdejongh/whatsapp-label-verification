@@ -429,6 +429,13 @@ def render_audit_log(items, counts, filters, next_key):
 def handle_audit_log(token, query_params, format_=None):
     sender_filter = query_params.get('sender', '').strip()
     result_filter = query_params.get('result', '').strip()
+    # DoleFrontEnd's single search box (unlike the HTML dashboard's dedicated
+    # "Filter by sender phone" field above) -- matches across several
+    # display fields, not just the sender phone number. Applied in Python
+    # after the query below rather than as a DynamoDB FilterExpression so it
+    # can be case-insensitive (DynamoDB's contains() is case-sensitive and
+    # has no LOWER()-style function to normalize with).
+    search_filter = query_params.get('q', '').strip()
     last_key = decode_key(query_params.get('last_key'))
 
     table = dynamodb.Table(AUDIT_TABLE_NAME)
@@ -468,6 +475,18 @@ def handle_audit_log(token, query_params, format_=None):
         if format_ == 'json':
             return json_response({'error': str(e)}, status=500)
         return text_response(500, f'Error querying audit log: {str(e)}')
+
+    if search_filter:
+        needle = search_filter.lower()
+        phone_needle = normalize_sender_filter(search_filter)
+
+        def matches_search(item):
+            text_fields = (item.get('sender_name', ''), item.get('spec_code', ''), item.get('detail', ''), item.get('msg_type', ''), item.get('result', ''))
+            if any(needle in str(f).lower() for f in text_fields):
+                return True
+            return bool(phone_needle) and phone_needle in str(item.get('sender', ''))
+
+        items = [i for i in items if matches_search(i)]
 
     counts = {}
     for item in items:

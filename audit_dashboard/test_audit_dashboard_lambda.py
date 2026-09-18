@@ -332,6 +332,55 @@ class AuditLogJsonTests(unittest.TestCase):
         self.assertEqual({'FAIL': 1}, body['counts'])
         self.assertIsNotNone(body['next_key'])
 
+    def test_q_search_matches_sender_name_case_insensitively(self):
+        self.table.query.return_value = {
+            'Items': [
+                {'timestamp': 't1', 'sender': '27833801959', 'sender_name': 'Evert', 'spec_code': '15A', 'result': 'FAIL', 'detail': 'x'},
+                {'timestamp': 't2', 'sender': '27831234567', 'sender_name': 'Someone Else', 'spec_code': '9A', 'result': 'PASS', 'detail': 'y'},
+            ],
+        }
+        response = dashboard.handle_audit_log('token', {'q': 'evert'}, format_='json')
+        body = json.loads(response['body'])
+
+        self.assertEqual(1, len(body['items']))
+        self.assertEqual('Evert', body['items'][0]['sender_name'])
+
+    def test_q_search_matches_detail_text(self):
+        self.table.query.return_value = {
+            'Items': [
+                {'timestamp': 't1', 'sender': '1', 'sender_name': 'A', 'spec_code': '15A', 'result': 'FAIL', 'detail': 'Order number format mismatch'},
+                {'timestamp': 't2', 'sender': '2', 'sender_name': 'B', 'spec_code': '9A', 'result': 'PASS', 'detail': 'all good'},
+            ],
+        }
+        response = dashboard.handle_audit_log('token', {'q': 'order number'}, format_='json')
+        body = json.loads(response['body'])
+
+        self.assertEqual(1, len(body['items']))
+        self.assertEqual('15A', body['items'][0]['spec_code'])
+
+    def test_q_search_matches_local_format_phone_number(self):
+        self.table.query.return_value = {
+            'Items': [
+                {'timestamp': 't1', 'sender': '27833801959', 'sender_name': 'A', 'spec_code': '15A', 'result': 'FAIL', 'detail': ''},
+                {'timestamp': 't2', 'sender': '27831234567', 'sender_name': 'B', 'spec_code': '9A', 'result': 'PASS', 'detail': ''},
+            ],
+        }
+        response = dashboard.handle_audit_log('token', {'q': '083 380 1959'}, format_='json')
+        body = json.loads(response['body'])
+
+        self.assertEqual(1, len(body['items']))
+        self.assertEqual('083 380 1959', body['items'][0]['sender'])
+
+    def test_q_search_no_match_returns_empty_items(self):
+        self.table.query.return_value = {
+            'Items': [{'timestamp': 't1', 'sender': '1', 'sender_name': 'A', 'spec_code': '15A', 'result': 'FAIL', 'detail': ''}],
+        }
+        response = dashboard.handle_audit_log('token', {'q': 'nonexistent'}, format_='json')
+        body = json.loads(response['body'])
+
+        self.assertEqual([], body['items'])
+        self.assertEqual({}, body['counts'])
+
     def test_json_format_omits_next_key_on_last_page(self):
         self.table.query.return_value = {'Items': []}
         response = dashboard.handle_audit_log('token', {}, format_='json')
