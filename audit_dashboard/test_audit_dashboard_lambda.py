@@ -521,5 +521,69 @@ class SpecFilesJsonTests(unittest.TestCase):
         self.assertEqual('text/html; charset=utf-8', response['headers']['Content-Type'])
 
 
+class SpecCatalogJsonTests(unittest.TestCase):
+    """format_='json' is consumed by DoleFrontEnd's Label Verification ->
+    Spec Catalog page -- same DynamoDB scan/put/delete and PDF
+    download/cache logic as the HTML dashboard, just serialized instead of
+    rendered."""
+
+    def setUp(self):
+        self.table = Mock()
+        self.dynamodb = Mock()
+        self.dynamodb.Table.return_value = self.table
+        self.s3 = Mock()
+
+        self.dynamodb_patch = patch.object(dashboard, 'dynamodb', self.dynamodb)
+        self.s3_patch = patch.object(dashboard, 's3_client', self.s3)
+        self.dynamodb_patch.start()
+        self.s3_patch.start()
+        self.addCleanup(self.dynamodb_patch.stop)
+        self.addCleanup(self.s3_patch.stop)
+
+    def test_get_json_returns_items_with_pdf_preview_url(self):
+        self.table.scan.return_value = {'Items': [
+            {'spec_code': '9A', 'description': 'LIDL EU', 'pdf_url': 'https://example.test/9a.pdf', 'pdf_s3_key': 'specs/9A_specsheet.pdf'},
+        ]}
+        response = dashboard.handle_catalog_get('token', {}, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        self.assertEqual('application/json', response['headers']['Content-Type'])
+        body = json.loads(response['body'])
+        self.assertEqual(1, len(body['items']))
+        self.assertEqual('9A', body['items'][0]['spec_code'])
+        self.assertIsNotNone(body['items'][0]['pdf_preview_url'])
+
+    def test_save_json_missing_spec_code_returns_400(self):
+        form = {'action': ['save'], 'spec_code': [''], 'description': ['x'], 'pdf_url': ['']}
+        response = dashboard.handle_catalog_post('token', form, format_='json')
+
+        self.assertEqual(400, response['statusCode'])
+        self.table.put_item.assert_not_called()
+
+    def test_save_json_without_pdf_returns_success(self):
+        self.table.get_item.return_value = {'Item': {}}
+        form = {'action': ['save'], 'spec_code': ['9a'], 'description': ['LIDL EU'], 'pdf_url': ['']}
+        response = dashboard.handle_catalog_post('token', form, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        body = json.loads(response['body'])
+        self.assertTrue(body['success'])
+        self.table.put_item.assert_called_once_with(Item={'spec_code': '9A', 'description': 'LIDL EU'})
+
+    def test_delete_json_returns_success(self):
+        self.table.get_item.return_value = {'Item': {}}
+        form = {'action': ['delete'], 'spec_code': ['9A']}
+        response = dashboard.handle_catalog_post('token', form, format_='json')
+
+        self.assertEqual(200, response['statusCode'])
+        self.assertTrue(json.loads(response['body'])['success'])
+        self.table.delete_item.assert_called_once_with(Key={'spec_code': '9A'})
+
+    def test_html_format_unaffected(self):
+        self.table.scan.return_value = {'Items': []}
+        response = dashboard.handle_catalog_get('token', {}, format_=None)
+        self.assertEqual('text/html; charset=utf-8', response['headers']['Content-Type'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -640,12 +640,26 @@ def render_catalog(token, items, edit_item, adding_new, error):
     return page_shell("WhatsApp Label Verification - Spec Catalog", render_nav(token, 'catalog'), body, extra_script=ROW_SELECT_SCRIPT)
 
 
-def handle_catalog_get(token, query_params):
+def handle_catalog_get(token, query_params, format_=None):
     try:
         items = scan_spec_catalog()
     except Exception as e:
         logger.error(f"Failed to scan spec catalog: {str(e)}")
+        if format_ == 'json':
+            return json_response({'error': str(e)}, status=500)
         return text_response(500, f'Error loading spec catalog: {str(e)}')
+
+    if format_ == 'json':
+        json_items = [
+            {
+                'spec_code': item.get('spec_code', ''),
+                'description': item.get('description', ''),
+                'pdf_url': item.get('pdf_url', ''),
+                'pdf_preview_url': get_presigned_url(item.get('pdf_s3_key')),
+            }
+            for item in items
+        ]
+        return json_response({'items': json_items})
 
     edit_item = None
     adding_new = False
@@ -662,7 +676,7 @@ def handle_catalog_get(token, query_params):
     return html_response(render_catalog(token, items, edit_item, adding_new, error=None))
 
 
-def handle_catalog_post(token, form):
+def handle_catalog_post(token, form, format_=None):
     action = form.get('action', [''])[0]
     table = dynamodb.Table(SPEC_CATALOG_TABLE_NAME)
 
@@ -677,6 +691,10 @@ def handle_catalog_post(token, form):
                     s3_client.delete_object(Bucket=SPEC_BUCKET_NAME, Key=pdf_key)
             except Exception as e:
                 logger.error(f"Failed to delete spec {spec_code}: {str(e)}")
+                if format_ == 'json':
+                    return json_response({'error': str(e)}, status=500)
+        if format_ == 'json':
+            return json_response({'success': True})
         return redirect_response(f"?token={urllib.parse.quote(token)}&view=catalog")
 
     if action == 'save':
@@ -685,6 +703,8 @@ def handle_catalog_post(token, form):
         pdf_url = form.get('pdf_url', [''])[0].strip()
 
         if not spec_code:
+            if format_ == 'json':
+                return json_response({'error': 'Spec code is required.'}, status=400)
             items = scan_spec_catalog()
             fallback_item = {'spec_code': '', 'description': description, 'pdf_url': pdf_url}
             return html_response(render_catalog(token, items, edit_item=fallback_item, adding_new=True, error="Spec code is required."))
@@ -714,13 +734,19 @@ def handle_catalog_post(token, form):
             table.put_item(Item=item)
         except Exception as e:
             logger.error(f"Failed to save spec {spec_code}: {str(e)}")
+            if format_ == 'json':
+                return json_response({'error': f'Save failed: {str(e)}'}, status=500)
             items = scan_spec_catalog()
             edit_item = {'spec_code': spec_code, 'description': description, 'pdf_url': pdf_url}
             was_new = not any(i.get('spec_code') == spec_code for i in items)
             return html_response(render_catalog(token, items, edit_item, adding_new=was_new, error=f"Save failed: {str(e)}"))
 
+        if format_ == 'json':
+            return json_response({'success': True, 'item': item})
         return redirect_response(f"?token={urllib.parse.quote(token)}&view=catalog")
 
+    if format_ == 'json':
+        return json_response({'error': f'Unknown action: {action}'}, status=400)
     return redirect_response(f"?token={urllib.parse.quote(token)}&view=catalog")
 
 
@@ -1610,8 +1636,8 @@ def lambda_handler(event, context):
     try:
         if view == 'catalog':
             if http_method == 'POST':
-                return handle_catalog_post(token, form)
-            return handle_catalog_get(token, query_params)
+                return handle_catalog_post(token, form, format_=format_)
+            return handle_catalog_get(token, query_params, format_=format_)
         elif view == 'tables':
             if http_method == 'POST':
                 return handle_tables_post(token, form, format_=format_)
