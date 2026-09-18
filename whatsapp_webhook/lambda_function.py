@@ -1606,7 +1606,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             if not value:
                 failed_zones.append(f"{check_name} (Missing / Empty)")
             elif pattern and not re.search(pattern, str(value), re.IGNORECASE):
-                failed_zones.append(f"{check_name} (Content Mismatch)")
+                failed_zones.append(f"{check_name} (Content Mismatch: found '{value}')")
             else:
                 passed_zones += 1
                 passed_zone_names.append(check_name)
