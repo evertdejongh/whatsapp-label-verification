@@ -19,7 +19,7 @@
     },
     {
       "name": "Origin South Africa",
-      "pattern": "(Country\\s+of\\s+Origin\\s*:?\\s*South\\s*Africa)|(Origin\\s*:?\\s*South\\s*Africa)|(Origin\\s+of\\s+South\\s*Africa)"
+      "pattern": "(?=[\\s\\S]*Origin)(?=[\\s\\S]*South\\s*Africa)"
     }
   ],
   "field_checks": [
