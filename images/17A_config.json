@@ -12,12 +12,13 @@
     "GGN": "the 13-digit value printed next to 'GGN:' in the pack details row (near PUC/PHC/Orchard)",
     "OriginField": "the value printed next to the standalone English-only 'Origin' heading in the bottom pack details row (near PUC/GGN/PHC/Orchard) -- NOT the 'Negara Asal / Country Of Origin' bilingual field near the top of the label"
   },
-  "field_checks": [
+  "full_label_checks": [
     {
-      "field": "CountryOfOrigin",
       "name": "Country of Origin (English + Malay)",
-      "expected_pattern": "(?=[\\s\\S]*South\\s*Africa)(?=[\\s\\S]*Afrika\\s*Selatan)"
-    },
+      "pattern": "(?=[\\s\\S]*South\\s*Africa)(?=[\\s\\S]*Afrika\\s*Selatan)"
+    }
+  ],
+  "field_checks": [
     {
       "field": "AgentCode",
       "name": "Agent code printed"
