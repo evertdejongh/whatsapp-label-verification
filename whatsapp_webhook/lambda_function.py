@@ -1515,13 +1515,6 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
         passed_zone_names = []
         warnings = []
         zone_content = {}
-        # Counts field_checks/lookup_rules entries marked "optional" that
-        # were skipped because the field they depend on wasn't on the label
-        # at all -- e.g. 17A's Agent code, which some genuine label designs
-        # never print. These don't count as passed or failed; total_regions
-        # is reduced by this count below so the PASS/FAIL arithmetic
-        # (passed_zones == total_regions) still works out.
-        skipped_optional = 0
 
         for zone in target_regions:
             zone_name = zone.get("name", "Unnamed Block")
@@ -1628,9 +1621,6 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             value = extracted_fields.get(field_name)
 
             if not value:
-                if check.get("optional"):
-                    skipped_optional += 1
-                    continue
                 failed_zones.append(f"{check_name} (Missing / Empty)")
             elif pattern and not re.search(pattern, str(value), re.IGNORECASE):
                 allowed = humanize_allowed_pattern(pattern) if pattern else None
@@ -1965,14 +1955,6 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
 
             if not items:
                 if not key:
-                    # A rule marked "optional" can't even be attempted when
-                    # the field it keys off of (e.g. AgentCode) simply isn't
-                    # printed on this label design -- that's not the same as
-                    # a wrong/mismatched value, so it's skipped rather than
-                    # failed.
-                    if rule.get("optional"):
-                        skipped_optional += 1
-                        continue
                     failed_zones.append(f"{rule_name} (Could not resolve {last_unresolved_attr} for lookup)")
                 else:
                     failed_zones.append(f"{rule_name} ({key} not found in reference table)")
@@ -2325,7 +2307,6 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             + len(color_tag_checks) + len(allowed_variety_group_checks)
             + len(date_comparison_checks) + len(arithmetic_checks) + len(field_equality_checks)
             + len(week_day_code_checks) + len(logo_checks) + len(conditional_pattern_checks)
-            - skipped_optional
         )
         warnings_block = (
             f"• Warnings:\n" + "\n".join([f"  - ⚠️ {w}" for w in warnings]) + "\n"
