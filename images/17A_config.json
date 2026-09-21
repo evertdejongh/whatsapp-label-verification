@@ -16,6 +16,10 @@
     {
       "name": "Country of Origin (English + Malay)",
       "pattern": "(?=[\\s\\S]*South\\s*Africa)(?=[\\s\\S]*Afrika\\s*Selatan)"
+    },
+    {
+      "name": "Origin South Africa",
+      "pattern": "(Country\\s+of\\s+Origin\\s*:?\\s*South\\s*Africa)|(Origin\\s*:?\\s*South\\s*Africa)|(Origin\\s+of\\s+South\\s*Africa)"
     }
   ],
   "field_checks": [
@@ -27,11 +31,6 @@
       "field": "GGN",
       "name": "GGN",
       "expected_pattern": "\\b\\d{13}\\b"
-    },
-    {
-      "field": "OriginField",
-      "name": "Origin South Africa",
-      "expected_pattern": "South\\s*Africa"
     }
   ],
   "lookup_rules": [
