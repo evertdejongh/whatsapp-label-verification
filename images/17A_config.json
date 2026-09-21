@@ -20,7 +20,8 @@
     },
     {
       "field": "AgentCode",
-      "name": "Agent code printed"
+      "name": "Agent code printed",
+      "optional": true
     },
     {
       "field": "GGN",
@@ -68,7 +69,8 @@
         "Code": "field:AgentCode"
       },
       "compare_attribute": "ImporterName",
-      "compare_zone": "ImporterName"
+      "compare_zone": "ImporterName",
+      "optional": true
     },
     {
       "name": "Importer address matches agent code",
@@ -78,7 +80,8 @@
       },
       "compare_attribute": "AddressLines",
       "compare_zone": "ImporterAddress",
-      "fuzzy_threshold": 0.85
+      "fuzzy_threshold": 0.85,
+      "optional": true
     }
   ],
   "size_prompt_checks": [
