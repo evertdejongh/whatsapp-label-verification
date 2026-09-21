@@ -5,7 +5,7 @@
     "AgriculturalProduceType": "the value printed next to 'Nama Pertanian :' / 'Agricultural Produce Type' heading (e.g. 'Anggur Hijau')",
     "CountryOfOrigin": "the full value(s) printed next to 'Negara Asal :' / 'Country Of Origin' heading, including both the English and Malay text",
     "ExporterBlock": "the full value printed next to 'Nama & Alamat Pengeksport:' / 'Exporter by Name & Address:' heading, including the GLN number",
-    "AgentCode": "the value printed next to the standalone 'Agent:' heading",
+    "AgentCode": "the agent code -- usually the value printed next to a standalone 'Agent:' heading, but on some label designs there is no 'Agent:' heading at all and it is instead a short 2-3 letter code printed alone in its own box (e.g. next to or below the Exporter Name & Address block) -- in that case use that boxed code",
     "ImporterName": "the company name portion only (not the address) of the value printed next to 'Nama & Alamat Pengimport:' / 'Importer Name & Address:' heading",
     "ImporterAddress": "the address portion only (excluding the company name) of the value printed next to 'Nama & Alamat Pengimport:' / 'Importer Name & Address:' heading",
     "PUC": null,
