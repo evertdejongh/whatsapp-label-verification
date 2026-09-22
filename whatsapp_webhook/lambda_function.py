@@ -1596,20 +1596,34 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             full_label_lines = detect_zone_lines_textract(extracted_bytes)
             full_label_text = " ".join(full_label_lines)
 
-        if full_label_checks:
-            for check in full_label_checks:
-                check_name = check.get("name", "Unnamed Check")
-                pattern = check.get("pattern")
-                if pattern and not re.search(pattern, full_label_text, re.IGNORECASE):
-                    failed_zones.append(f"{check_name} (Missing required text)")
-                else:
-                    passed_zones += 1
-                    passed_zone_names.append(check_name)
-
         extracted_fields = {}
         if extract_field_specs:
             extracted_fields = extract_label_fields(extracted_bytes, extract_field_specs, vision_llm_api_key)
             logger.info(f"Extracted label fields: {extracted_fields}")
+
+        if full_label_checks:
+            for check in full_label_checks:
+                check_name = check.get("name", "Unnamed Check")
+                pattern = check.get("pattern")
+                # A check can name one or more extract_fields to prefer over
+                # the raw full-label text (e.g. 17A's Origin South Africa
+                # anchors to OriginField/CountryOfOrigin when Gemini found
+                # them) -- Textract's line order doesn't follow the label's
+                # visual layout, so a field a targeted vision extraction
+                # already isolated is more precise than re-deriving it from
+                # the jumbled full-label OCR. Only falls back to full_label_text
+                # when none of the named fields were actually found on this
+                # label design.
+                anchor_fields = check.get("fields", [])
+                anchor_value = next(
+                    (str(extracted_fields[f]) for f in anchor_fields if extracted_fields.get(f)), None
+                )
+                text_to_check = anchor_value if anchor_value is not None else full_label_text
+                if pattern and not re.search(pattern, text_to_check, re.IGNORECASE):
+                    failed_zones.append(f"{check_name} (Missing required text)")
+                else:
+                    passed_zones += 1
+                    passed_zone_names.append(check_name)
 
         # Layout-agnostic replacement for what evaluate_zone's
         # expected_pattern did against a zone crop -- same regex check, but

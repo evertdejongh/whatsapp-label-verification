@@ -15,11 +15,13 @@
   "full_label_checks": [
     {
       "name": "Country of Origin (English + Malay)",
+      "fields": ["CountryOfOrigin"],
       "pattern": "(?=[\\s\\S]*South\\s*Africa)(?=[\\s\\S]*Afrika\\s*Selatan)"
     },
     {
       "name": "Origin South Africa",
-      "pattern": "(?=[\\s\\S]*Origin)(?=[\\s\\S]*South\\s*Africa)"
+      "fields": ["OriginField", "CountryOfOrigin"],
+      "pattern": "South\\s*Africa"
     }
   ],
   "field_checks": [
