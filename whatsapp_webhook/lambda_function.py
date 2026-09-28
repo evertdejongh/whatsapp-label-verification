@@ -2329,6 +2329,11 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
         # suffixes like "5D"/"XU" (e.g. "5D" -> "5d"), and the raw suffix is
         # exactly the identifier printed on the label itself.
         label_type_line = f"• Label Type: *{variant_suffix}*\n" if variant_suffix else ""
+        # TEMPORARY: list every passed check too, for testing -- remove
+        # passed_block (and its two uses below) once testing is done.
+        passed_block = (
+            f"• Passed Blocks:\n" + "\n".join([f"  - ✅ {pz}" for pz in passed_zone_names]) + "\n"
+        ) if passed_zone_names else ""
 
         if not failed_zones and passed_zones == total_regions:
             return "PASS", (
@@ -2336,6 +2341,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 f"• Spec Reference: *{spec_code}*\n"
                 f"{label_type_line}"
                 f"• Target Zones Checked: *{total_regions} blocks*\n"
+                f"{passed_block}"
                 f"{warnings_block}\n"
                 f"_All required zones matched their expected content._\n\n"
                 f"{LAYOUT_CHECK_DISCLAIMER}"
@@ -2346,6 +2352,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 f"❌ *Layout Verification FAILED*\n\n"
                 f"• Spec Reference: *{spec_code}*\n"
                 f"{label_type_line}"
+                f"{passed_block}"
                 f"• Failed Blocks:\n{failed_list}\n"
                 f"{warnings_block}\n"
                 f"_Please correct invalid info and re-submit._\n\n"
