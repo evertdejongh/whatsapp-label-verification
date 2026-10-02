@@ -41,5 +41,12 @@
       "query": true,
       "store_as": "variety"
     }
+  ],
+  "logo_checks": [
+    {
+      "name": "QR code",
+      "description": "a square 2D QR code -- a matrix of small black squares with three larger square position markers in its corners (often with 'PPWR' printed in or beside it). NOT the ordinary 1D striped/linear barcode",
+      "require_color": false
+    }
   ]
 }
