@@ -2,7 +2,7 @@
   "layout_agnostic": true,
   "extract_fields": {
     "PUC": null,
-    "Variety": null,
+    "Variety": "the full variety name over-printed on the label (near the GGN / PUC / Lot no.), copied exactly as printed -- include BOTH the code name and any trade name in brackets, plus any ®/™ symbol, e.g. 'SUGRANINETEEN (SCARLOTTA SEEDLESS®)' or 'CRIMSON SEEDLESS'. Never return just the part in brackets",
     "GGN": "the 13-digit GGN number printed on the label",
     "LotNumber": "the lot/batch code printed on the label (e.g. 'L36-04')",
     "VarietyGroup": "the produce variety group / commodity name printed on the label (e.g. 'White Seedless Grapes')"
