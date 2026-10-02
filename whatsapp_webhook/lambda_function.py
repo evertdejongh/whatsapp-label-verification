@@ -1496,6 +1496,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
     size_prompt_checks = config_data.get('size_prompt_checks', [])
     color_tag_checks = config_data.get('color_tag_checks', [])
     allowed_variety_group_checks = config_data.get('allowed_variety_group_checks', [])
+    closest_match_checks = config_data.get('closest_match_checks', [])
     date_comparison_checks = config_data.get('date_comparison_checks', [])
     date_freshness_checks = config_data.get('date_freshness_checks', [])
     arithmetic_checks = config_data.get('arithmetic_checks', [])
@@ -2151,6 +2152,65 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 passed_zones += 1
                 passed_zone_names.append(check_name)
 
+        # Identifies which reference row a printed block most closely
+        # resembles, then checks that row against a value resolved elsewhere
+        # -- e.g. Lidl punnet stock comes pre-printed with one variety
+        # group's 23-language name block, and the over-printed Variety must
+        # belong to that same group (Crimson Seedless on Red Seedless stock,
+        # not White). Packaging wording drifts from the reference table
+        # ("Red Grapes, seedless" vs "Seedless Red Grapes"), so rather than
+        # a near-exact fuzzy_threshold match this picks the best-scoring row
+        # and requires it to clearly beat the runner-up.
+        for check in closest_match_checks:
+            check_name = check.get("name", "Closest match")
+            actual_text = get_compare_text(check.get("source"), zone_content, extracted_fields, text_blocks).upper()
+            if not actual_text:
+                failed_zones.append(f"{check_name} (Missing / Empty)")
+                continue
+
+            expected_value = resolve_lookup_value(
+                check.get("expected_source"), extracted_fields, config_data, rule_results
+            )
+            if not expected_value:
+                failed_zones.append(f"{check_name} (Could not resolve expected value)")
+                continue
+
+            match_attribute = check.get("match_attribute")
+            result_attribute = check.get("result_attribute")
+            try:
+                rows = dynamodb.Table(check.get("table")).scan().get('Items', [])
+            except Exception as e:
+                logger.error(f"Closest-match check '{check_name}' table scan failed: {str(e)}")
+                failed_zones.append(f"{check_name} (Lookup failed)")
+                continue
+
+            scored = sorted(
+                (
+                    (difflib.SequenceMatcher(None, normalize_zone_text([str(row[match_attribute])]).upper(), actual_text).ratio(), row)
+                    for row in rows if row.get(match_attribute)
+                ),
+                key=lambda pair: pair[0],
+                reverse=True,
+            )
+            if not scored:
+                failed_zones.append(f"{check_name} (No reference entries to compare against)")
+                continue
+
+            best_score, best_row = scored[0]
+            runner_up_score = scored[1][0] if len(scored) > 1 else 0.0
+            best_value = str(best_row.get(result_attribute, ""))
+            logger.info(
+                f"Closest-match check '{check_name}': best '{best_value}' ({best_score:.3f}), "
+                f"runner-up {runner_up_score:.3f}, expected '{expected_value}'"
+            )
+            if best_score < check.get("min_score", 0.5) or best_score - runner_up_score < check.get("min_margin", 0.2):
+                failed_zones.append(f"{check_name} (Could not identify the printed text -- closest '{best_value}' at {best_score:.2f})")
+            elif best_value.upper() != str(expected_value).strip().upper():
+                failed_zones.append(f"{check_name} (Printed for '{best_value}', but label is for '{expected_value}')")
+            else:
+                passed_zones += 1
+                passed_zone_names.append(check_name)
+
         # Chronological ordering between two printed dates (e.g. an expiry
         # date must fall after the production date) -- plain string
         # comparison doesn't work for dd.mm.yyyy text, so this actually
@@ -2318,7 +2378,7 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
         total_regions = (
             len(target_regions) + len(full_label_checks) + len(lookup_rules)
             + len(field_checks) + len(text_block_checks) + len(size_prompt_checks)
-            + len(color_tag_checks) + len(allowed_variety_group_checks)
+            + len(color_tag_checks) + len(allowed_variety_group_checks) + len(closest_match_checks)
             + len(date_comparison_checks) + len(arithmetic_checks) + len(field_equality_checks)
             + len(week_day_code_checks) + len(logo_checks) + len(conditional_pattern_checks)
         )

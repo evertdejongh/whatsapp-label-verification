@@ -41,5 +41,26 @@
       "query": true,
       "store_as": "variety"
     }
+  ],
+  "text_blocks": {
+    "Variety Group languages": "the pre-printed block of text listing this product's name translated into approximately 23 different European languages (e.g. 'Trauben rot, kernlos / Seedless Red Grapes / Raisin rosé sans pépin / ...') -- NOT the 'South Africa' country translations or the net weight translations"
+  },
+  "text_block_checks": [
+    {
+      "block": "Variety Group languages",
+      "expected_token_count": 23
+    }
+  ],
+  "closest_match_checks": [
+    {
+      "name": "Pre-printed variety group matches variety",
+      "source": "Variety Group languages",
+      "table": "whatsapp-variety-group",
+      "match_attribute": "LidlTranslations",
+      "result_attribute": "VarietyGroupCode",
+      "expected_source": "result:variety.VarietyGroupCode",
+      "min_score": 0.5,
+      "min_margin": 0.2
+    }
   ]
 }
