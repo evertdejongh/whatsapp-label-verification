@@ -13,7 +13,9 @@
     "PackhouseGGN": "the 13-digit GGN number printed alongside/immediately after the Packhouse's own address block (the facility named next to 'Packhouse:'). On some label layouts the Supplier's block is what appears directly below the Packhouse block -- do NOT use the Supplier's registration number/GLN there, that belongs to a different company. It is common for this to be identical to the Grower GGN when the grower and packhouse are the same operation",
     "IANNumber": "a standalone short numeric code (about 5 digits), usually printed near the top of the label close to a multi-language translation block -- NOT the long alphanumeric traceability code, and NOT the barcode number",
     "LidlProductNumber": "a long alphanumeric traceability/batch code (around 17 characters, mixing letters and digits, e.g. like 'GR007198BZA999808'), usually printed right after a shorter batch/lot code such as 'L36-04'",
-    "BarcodeNumber": "the long numeric string printed directly with/under the barcode graphic itself"
+    "BarcodeNumber": "the long numeric string printed directly with/under the barcode graphic itself",
+    "OriginStatement": "the label's origin statement, e.g. 'Origin South Africa' or 'Country of Origin South Africa', or a small box with an 'Origin of:' heading and the country printed beneath it -- give the heading and the country together exactly as printed. NOT the multi-language 'South Africa' translation block, and NOT the exporter/supplier address",
+    "ImporterBlock": "the importer's name, address and GLN -- very small text, usually printed sideways (rotated 90 degrees) in a strip running alongside the barcode, e.g. 'Imported by: Dole Europe GmbH | Stadtdeich 7 | 20097 Hamburg | Germany | GLN 4014071000001' -- transcribe the whole strip exactly as printed, including any 'Imported by' heading and the GLN digits. NOT the exporter/supplier (Dole South Africa) address"
   },
   "field_checks": [
     {
@@ -91,7 +93,8 @@
     },
     {
       "name": "Origin statement",
-      "pattern": "(ORIGIN\\s+SOUTH\\s+AFRICA|COUNTRY\\s+OF\\s+ORIGIN\\s+SOUTH\\s+AFRICA)"
+      "fields": ["OriginStatement"],
+      "pattern": "(ORIGIN\\s+SOUTH\\s+AFRICA|COUNTRY\\s+OF\\s+ORIGIN\\s+SOUTH\\s+AFRICA|ORIGIN\\s+OF\\s*:?\\s*SOUTH\\s+AFRICA)"
     },
     {
       "name": "Supplier address",
@@ -103,10 +106,12 @@
     },
     {
       "name": "Importer address",
-      "pattern": "EUROPE\\s+GMBH\\s*[/7I|]?\\s*STADTDE[IL]CH"
+      "fields": ["ImporterBlock"],
+      "pattern": "EUROPE\\s+GMBH[\\s\\S]{0,5}?STADTDE[IL]CH"
     },
     {
       "name": "Importer GLN",
+      "fields": ["ImporterBlock"],
       "pattern": "4014071000001"
     }
   ],
