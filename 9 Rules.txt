@@ -1,0 +1,47 @@
+1. Its not actually called Commodity, it is called Variety Group.
+2. Validate the Variety against a Variety table. This table will contain Variety Name, Variety Code, Variety Group Code, Commodity Code.
+3. Validate the 23 commodity languages depending on the Variety Group linked to the Variety. This will be stored in a Variety Group table. Will contain Variety Group Code, Variety Group 23 Languages.
+4. Validate the IAN number against another table (IAN Numbers) depenending on Commodity Code, Variety Group Code, Pack Code, Inventory Code. Pakc Code and Inventory Code is also on the label.
+5. Validate that the 23 language Country descriptions are correct and valid Countries.
+6. GGN - Validate against a table called PUC. The PUC is also on the label and the GGN must be validated according to this table. Fiels will be PUC and GGN.
+7. PHC GLN number - Validate against a table called PHC, which will contain PHC (also on label) and GLN number.
+8. Supplier - Must be 'DOLE SOUTH AFRICA (PTY) LTD' and '6009644340002'
+9. Size and Size Prompt : Can the Size be validated against the Size indication on the spec allowed image where the allowed sizes are specified.
+		This Size must then be used together with Commodity and Pack to get the Size Ref, Diameter and Mass Range from the Size table.
+		IF Commodity in 'OR,GF,LE'
+		  Size Prompt = 'Size Ref/Size:' 
+		  Size = SizeRef&'/'&Size
+		IF Commodity in SC'
+		  Size Prompt = 'Size Ref:' 
+		  Size = Size
+		IF Commodity,'GR'
+		  Size Prompt = 'Berry Size:'
+		  if Size='R'
+			  Size = 'Regular'
+		  ELSE
+			  Size = Size
+		  END
+		IF Commodity in 'PL'
+		  Size Prompt = 'Size/Diameter:' 
+		  Size = Size&'/'&Diameter
+		IF Commodity in 'NE,PE'
+		  Size Prompt = 'Size/Count/Diameter:' 
+		  Size = Size&'/'&SizeRef&'/'&Diameter
+		IF Commodity in 'AC'
+		  Size Prompt = 'Size/Diameter:' 
+		  Size = Size&'/'&Diameter
+		IF Commodity in 'BB'
+		  Size Prompt = 'Size:' 
+		  Size = Size
+		IF Commodity in 'AV'
+		  Size Prompt = 'Size/Mass Range:' 
+		  Size = Size&'/'&InnerPackiging
+		ELSE
+		  Size Prompt = 'Size:' 
+		  Size = Size
+		END  
+10. PUC : Must be validated against a table PUC, which will have fields, PUC and GGN.
+11. Lidl Product Number - Must be validated against a table called Commodity which will have fields, Commodity and Lidl Product Number. Commodity will come from the Variety table.
+12. 'Origin South Africa' or 'Country of Origin South Africa' must exist somewhere on label.
+13. 'DOLE SOUTH AFRICA (PTY) LTD, 26 BELLA ROSA STREET, BELLVILLE, 7530' must exist somewhere on label.
+14. 'Imported by : Dole Europe GmbH | Stadtdeich 7 | 20097 Hamburg | Germany' and 'GLN 4014071000001' must exist somewhere on label.

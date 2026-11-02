@@ -1,0 +1,149 @@
+Python
+
+import os
+print(os.listdir("."))
+
+Code output
+
+['input_file_0.png']
+
+Python
+
+from PIL import Image
+img = Image.open('input_file_0.png')
+print(img.size, img.mode)
+
+Code output
+
+(1465, 878) RGBA
+
+Python
+
+import pytesseract
+text = pytesseract.image_to_string(img)
+print(text)
+
+Code output
+
+Traceback (most recent call last):
+  File "<xbox-string>", line 1, in <module>
+    import pytesseract
+ModuleNotFoundError: No module named 'pytesseract'
+
+Product Identification
+
+    Product Name: Seedless White Grapes
+
+    Variety: SUGRATHIRTYFIVE (AUTUMNCRISP®)
+
+    Berry Size: L
+
+    Grade / Class: Klasse / Class / Cat. I
+
+    Unit / Nett Mass: 7 x 650g
+
+    PLU / Commodity Code: 80505
+
+Grower & Packhouse Information
+
+    Grower Code: 404992840313
+
+    Packhouse: REKOPANE ESTATE (PTY) LTD - SUMMERDOWN, DYASONKLIP , SSS, UPINGTON
+
+    Packhouse Code: 404992840313
+
+    PUC (Producer Unit Code): A0130
+
+    PHC (Packhouse Code): A0516
+
+    Orchard: B19
+
+Supplier & Origin
+
+    Supplier: DOLE SOUTH AFRICA (PTY) LTD
+
+    Supplier Code / GLN: 6009644340002
+
+    Supplier Address: DOLE SOUTH AFRICA (PTY) LTD, 26 BELLA ROSA STREET, BELLVILLE, 7530, SOUTH AFRICA
+
+    Country of Origin: South Africa (GRAPES)
+
+Packaging & Traceability
+
+    Key: 114
+
+    Pack: A05D
+
+    Pack Ref: 6403
+
+    Brand: LIDGN
+
+    Inv Code: P5
+
+    Prod Char: (Blank)
+
+    Traceability / Lot Codes: L 36 - 04 | GR007198BZA999808
+
+    Barcode (GTIN): 4064934262145
+
+Importer Information
+
+    Importer: Dole Europe GmbH
+
+    Importer Address: Stadtdeich 7, 20097 Hamburg, Germany
+
+    Importer GLN: 4014071000001
+
+Multilingual Product Description
+
+    German: Trauben hell, kernlos
+
+    English: Seedless White Grapes
+
+    French: Raisin blanc sans pépin
+
+    Spanish: Uva blanca, sin pepita
+
+    Italian: Uva bianca senza semi
+
+    Portuguese: Uva Branca s/ grainha
+
+    Greek: ΣΤΑΦΥΛΙΑ ΛΕΥΚΑ ΑΣΠΕΡΜΑ
+
+    Dutch: Druiven wit, pitloos
+
+    Finnish: Viinirypäle vihreä, siemenetön
+
+    Swedish / Danish: Gröna vindruvor, kärnfria / Grønne kernefri vindruer
+
+    Hungarian: Magnélküli fehérszőlő
+
+    Czech: Bílé hrozny stolní, bezpeckové
+
+    Polish: Winogrono jasne, bezpestkowe
+
+    Croatian / Bosnian / Serbian: Grožđe bijelo, bez koštica / Grožđe belo, besemeno
+
+    Slovak: Biele hrozno, bezjadierkové
+
+    Slovenian: Grozdje belo, brez pečk
+
+    Bulgarian: Бяло грозде без семки
+
+    Romanian: Struguri albi fara samburi
+
+    Lithuanian: Žaliosios vynuoges b.k.
+
+    Latvian: Gaišas vīnogas bez kauliņiem
+
+    Estonian: Heledad viinamarjad, seemneteta
+
+Multilingual Country Translations (South Africa)
+
+    Südafrika / South Africa / Afrique du Sud / Sudáfrica / Sud Africa / África do Sul / Νότια Αφρική / Zuid-Afrika / Etelä-Afrikka / Sydafrika / Sydafrika / Dél-afrikai Köztársaság / Jihoafrická republika / RPA / Južnoafrička Republika / Juhoafrická republika / Južna Afrika / ЮАР / Africa de Sud / Pietu Afrika / Južna Afrika / Dienvidafrika / Lõuna-Aafrika
+
+Footer & Intellectual Property
+
+    IP / Patent Reference: AUTUMN CRISP® TM/PVP/Patent www.sunworldip.com
+
+    System Marking: Printed with DoleLabels

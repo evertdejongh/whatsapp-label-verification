@@ -1,0 +1,64 @@
+This is the REWE group of labels (13A, 13B, 13C, 13D)
+1. This spec will only be for Grapes (GR)
+2. GGN - Derived from PUC table. GLN/GGN - Barcode of the GGN
+2. Headings must be Product, Artikelname, Variety/Sorte, Origin/Ursprung: South Africa/Südafrika, Class/Klasse, Units/Net Mass/Inhalt, Caliber/Kaliber, Lot number/Losnummer, NAN/Lieferantencode, GTIN
+3. Grapes must print
+4. The Variety Group beneath the Commodity Name must always be in English and German. 
+5. Lot number must be 'L' plus a valid weeknumber concatenated with a valid day of week number.
+6. if Pack in A04I,B04I
+	  if VarietyGroup = 'WS'
+		ReweNanPUC (NAN/Lieferantencode) = '7722245 - D7520'
+		GTIN='4337256546317'
+		Variety Group DE = 'Trauben Hell Kernlos'
+		Variety Group EN = 'White Seedless'
+		REWEPackiging (Units/Net Mass/Inhalt)  = '4.5kg'
+	  ELSIF VarietyGroup = 'RS'
+		ReweNanPUC (NAN/Lieferantencode) = '8873554 - D7520'
+		GTIN='4337256562003'
+		Variety Group DE = 'Trauben Rot Kernlos'
+		Variety Group EN = 'Red Seedless'
+		REWEPackiging (Units/Net Mass/Inhalt)  = '4.5kg'
+	  ELSIF VarietyGroup = 'BS'
+		ReweNanPUC (NAN/Lieferantencode) = '8952160 - D7520'
+		GTIN='4337256558372'
+		Variety Group DE = 'Trauben Blau Kernlos'
+		Variety Group EN = 'Black Seedless'
+		REWEPackiging (Units/Net Mass/Inhalt)  = '4.5kg'
+	  END
+  ELSIF Pack in A05D, A05A
+	  if VarietyGroup = 'WS'
+		ReweNanPUC (NAN/Lieferantencode) = '7412355 - D7520'
+		GTIN='4046118840691'
+		Variety Group DE = 'Trauben Hell Kernlos'
+		Variety Group EN = 'White Seedless'
+		REWEPackiging (Units/Net Mass/Inhalt)  = '10x500g'
+	  ELSIF VarietyGroup = 'RS'
+		 ReweNanPUC (NAN/Lieferantencode) = '9232885 - D7520'
+		GTIN='4051826535715'
+		Variety Group DE = 'Trauben Dunkel Kernlos'
+		Variety Group EN = 'Red Seedless'
+		REWEPackiging (Units/Net Mass/Inhalt)  = '10x500g'
+	  ELSIF VarietyGroup = 'BS'
+		 ReweNanPUC (NAN/Lieferantencode) = '9232885 - D7520'
+		GTIN='4051826535715'
+		Variety Group DE = 'Trauben Dunkel Kernlos'
+		Variety Group EN = 'Black Seedless'
+		REWEPackiging (Units/Net Mass/Inhalt)  = '10x500g'
+	  ELSIF VarietyGroup in BX RX 3X
+			IF InvCode <> 'RH'
+				ReweNanPUC (NAN/Lieferantencode) = '377024 - D7520'
+				GTIN='4051826598116'
+				Variety Group DE = 'Trauben Mix Kernlos'
+				Variety Group EN = 'Mixed Varieties'
+				REWEPackiging (Units/Net Mass/Inhalt)  = '10x500g'
+			ELSE
+				ReweNanPUC (NAN/Lieferantencode) = '9001853 - D7520'
+				GTIN='4337256718363'
+				Variety Group DE = 'Rewe Beste Wahl Tafeltrauben Mix, kernlos'
+				Variety Group EN = 'Mixed Varieties'
+				REWEPackiging (Units/Net Mass/Inhalt)  = '10x500g'
+			END
+  END
+7. 'Exported by Dole South Africa Pty (LTD), 26 Bella Rosa Street, Bellville, 7530 SOUTH AFRICA. GLN: 6009644340002' must be at bottom of label
+8. 'Imported by: Dole Europe GmbH / Stadtdeich 7, D-20097 Hamburg, Germany   GLN: 4014071000001 / G1 (Manifest): ' plus an unvalidated GTIN
+9. GLN/GGN - Barcode of the GGN

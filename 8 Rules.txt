@@ -1,0 +1,9 @@
+The GTIN must start with 4311. This indicates that we use the customer's (EDEKA) GTINs for this label.
+The Commodity heading must be 'Commodity/Produkt'
+The Variety heading must be 'Variety/Sorte'
+The Variety Group beneath the Variety Name must always be in English and German. 
+The Class heading must be 'Class/Cat/Klasse'
+'Origin : SOUTH AFRICA' and 'Ursprung: SÜDAFRIKA' must exist somewhere on label.
+'Abgepakt von: Dole South Africa (Pty) Ltd 26 Bella Rosa Street, D´Urban SQR, ZA Kapstadt 7530 Südafrika' must print at bottom of label
+'FÜR: EDEKA AG, www.edeka.de' must print at bottom of label
+'Exported by: Dole South Africa (Pty) Ltd, 26 Bella Rosa Street, D'Urban Square, Cape Town 7530.' must print at bottom of label
