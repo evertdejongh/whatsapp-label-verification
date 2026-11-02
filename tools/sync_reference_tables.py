@@ -1,19 +1,25 @@
 """
-Loads the Variety / VarietyGroup / IANNumbers / PUC / Commodity reference
-tables (used for cross-checking scanned label values, e.g. PUC -> GGN) into
-DynamoDB from WhatsAppTables.xlsx. Idempotent/safe to re-run whenever Dole
-issues updated reference data -- same pattern as sync_spec_catalog.py.
+Loads the Variety / VarietyGroup / IANNumbers / REWE-combinations / agent-
+address reference tables (used for cross-checking scanned label values, e.g.
+PUC -> GGN) into DynamoDB. Variety, VarietyGroup, IANNumbers and the agent
+addresses are read directly from their live Clarion TPS files; REWE
+combinations are hardcoded (see the comment above REWE_COMBINATION_ROWS).
+whatsapp-puc and whatsapp-commodity are deliberately NOT handled here --
+see the comment above sync_rewe_combinations() for why. Idempotent/safe to
+re-run whenever the underlying Clarion data changes -- same pattern as
+sync_spec_catalog.py.
 
 Usage:
-    python tools/sync_reference_tables.py [path-to-xlsx]
+    python tools/sync_reference_tables.py
 """
 import re
-import sys
 import os
 
 import boto3
-import openpyxl
 from botocore.exceptions import ClientError
+from striprtf.striprtf import rtf_to_text
+
+from tpsread import TPS
 
 
 def normalize_key_text(value):
@@ -25,16 +31,59 @@ def normalize_key_text(value):
     """
     return re.sub(r"\s+", " ", str(value)).strip().upper()
 
+
+def clean_tps_field(value):
+    """
+    TPS STRING fields are fixed-width and null-padded at rest -- a raw read
+    carries that padding through as trailing \\x00 bytes, which plain
+    .strip() doesn't touch. Every TPS field value needs this before use.
+    """
+    if value is None:
+        return ""
+    return str(value).rstrip("\x00").strip()
+
+
+def clean_tps_rtf_field(value):
+    """
+    Same null-padding strip as clean_tps_field(), plus RTF->plain-text
+    extraction for the handful of TPS fields stored as RTF blobs (Clarion's
+    TEXT,RTF(TEXT:FIELD) fields -- e.g. VG:LIDLDESCRIPTION). Raw RTF control
+    codes would never match real label text if a field like this is ever
+    used for matching, so this is the form worth storing.
+    """
+    text = clean_tps_field(value)
+    if not text:
+        return ""
+    return rtf_to_text(text).strip()
+
+
 REGION = "us-east-2"
-DEFAULT_XLSX_PATH = os.path.join(os.path.dirname(__file__), "..", "WhatsAppTables.xlsx")
-INDIA_ADDRESSES_XLSX_PATH = os.path.join(os.path.dirname(__file__), "extracted_indian_addresses.xlsx")
-AGENTS_XLSX_PATH = os.path.join(os.path.dirname(__file__), "Agents.xlsx")
+
+# Customers.TPS and InvCode.TPS are the live Clarion tables that Agents.xlsx
+# and extracted_indian_addresses.xlsx used to be one-time manual exports of
+# (confirmed by field-name lineage -- InvCode's INV:INDIANADDRESS3 is
+# literally where extracted_indian_addresses.xlsx's oddly-spaced
+# "Inv: IndianAddress3" header came from). Reading them directly here means
+# this script tracks the live DoleLabels data instead of a snapshot someone
+# has to remember to re-export.
+TPS_DATA_DIR = r"C:\Clarion 12 Source\DoleLabels\Data"
+CUSTOMERS_TPS_PATH = os.path.join(TPS_DATA_DIR, "Customers.TPS")
+INVCODE_TPS_PATH = os.path.join(TPS_DATA_DIR, "InvCode.TPS")
+VARIETIES_TPS_PATH = os.path.join(TPS_DATA_DIR, "Varieties.TPS")
+VARGRPS_TPS_PATH = os.path.join(TPS_DATA_DIR, "VarGrps.TPS")
+IAN_TPS_PATH = os.path.join(TPS_DATA_DIR, "ian.TPS")
+# Commodities.TPS was tried and dropped: tpsread can't parse it (its header
+# carries what looks like an offset array none of the single-table files
+# here have, suggesting multiple logical tables packed into the one
+# physical file). Moot anyway -- whatsapp-commodity changes rarely enough
+# that the user maintains it by hand via the dashboard's Reference Tables
+# tab instead, same as whatsapp-puc (owned by a separate scheduled job).
+# Neither is synced by this script; see the note above sync_rewe_combinations().
+TPS_ENCODING = "cp1252"
 
 VARIETY_TABLE = "whatsapp-variety"
 VARIETY_GROUP_TABLE = "whatsapp-variety-group"
 IAN_NUMBERS_TABLE = "whatsapp-ian-numbers"
-PUC_TABLE = "whatsapp-puc"
-COMMODITY_TABLE = "whatsapp-commodity"
 REWE_COMBINATIONS_TABLE = "whatsapp-rewe-combinations"
 AGENT_ADDRESSES_TABLE = "whatsapp-agent-addresses"
 
@@ -81,21 +130,24 @@ def _add_rewe_rows(packs, variety_group, nan_puc, gtin, de, en, packaging, inv_c
 
 
 # Pack A04I / B04I bucket (4.5kg)
-_add_rewe_rows(["A04I", "B04I"], "WS", "7722245 - D7520", "4337256546317", "Trauben Hell Kernlos", "White Seedless", "4.5kg")
-_add_rewe_rows(["A04I", "B04I"], "RS", "8873554 - D7520", "4337256562003", "Trauben Rot Kernlos", "Red Seedless", "4.5kg")
-_add_rewe_rows(["A04I", "B04I"], "BS", "8952160 - D7520", "4337256558372", "Trauben Blau Kernlos", "Black Seedless", "4.5kg")
+# ReweNanPUC suffix updated 2026-10-01 from D7520 to E4711 (rebuilt from the
+# current Clarion LidlPunnetStonefruit embed source the user pasted -- GTINs/
+# DE/EN names/packaging all confirmed unchanged, only this suffix moved).
+_add_rewe_rows(["A04I", "B04I"], "WS", "7722245 - E4711", "4337256546317", "Trauben Hell Kernlos", "White Seedless", "4.5kg")
+_add_rewe_rows(["A04I", "B04I"], "RS", "8873554 - E4711", "4337256562003", "Trauben Rot Kernlos", "Red Seedless", "4.5kg")
+_add_rewe_rows(["A04I", "B04I"], "BS", "8952160 - E4711", "4337256558372", "Trauben Blau Kernlos", "Black Seedless", "4.5kg")
 
 # Pack A05D / A05A bucket (10x500g)
-_add_rewe_rows(["A05D", "A05A"], "WS", "7412355 - D7520", "4046118840691", "Trauben Hell Kernlos", "White Seedless", "10x500g")
-_add_rewe_rows(["A05D", "A05A"], "RS", "9232885 - D7520", "4051826535715", "Trauben Dunkel Kernlos", "Red Seedless", "10x500g")
-_add_rewe_rows(["A05D", "A05A"], "BS", "9232885 - D7520", "4051826535715", "Trauben Dunkel Kernlos", "Black Seedless", "10x500g")
+_add_rewe_rows(["A05D", "A05A"], "WS", "7412355 - E4711", "4046118840691", "Trauben Hell Kernlos", "White Seedless", "10x500g")
+_add_rewe_rows(["A05D", "A05A"], "RS", "9232885 - E4711", "4051826535715", "Trauben Dunkel Kernlos", "Red Seedless", "10x500g")
+_add_rewe_rows(["A05D", "A05A"], "BS", "9232885 - E4711", "4051826535715", "Trauben Dunkel Kernlos", "Black Seedless", "10x500g")
 # BX/RX/3X default (InventoryCode != 'RH')
 for _vg in ("BX", "RX", "3X"):
-    _add_rewe_rows(["A05D", "A05A"], _vg, "377024 - D7520", "4051826598116", "Trauben Mix Kernlos", "Mixed Varieties", "10x500g")
+    _add_rewe_rows(["A05D", "A05A"], _vg, "377024 - E4711", "4051826598116", "Trauben Mix Kernlos", "Mixed Varieties", "10x500g")
 # BX/RX/3X exception (InventoryCode == 'RH')
 for _vg in ("BX", "RX", "3X"):
     _add_rewe_rows(
-        ["A05D", "A05A"], _vg, "9001853 - D7520", "4337256718363",
+        ["A05D", "A05A"], _vg, "9001853 - E4711", "4337256718363",
         "Rewe Beste Wahl Tafeltrauben Mix, kernlos", "Mixed Varieties", "10x500g", inv_code="RH",
     )
 
@@ -123,20 +175,13 @@ def ensure_table(table_name, key_schema, attribute_definitions):
     print(f"Table {table_name} created.")
 
 
-def rows(ws):
-    """Yields each data row (after the header) as a dict keyed by header cell."""
-    header = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if row[0] is None:
-            continue
-        yield dict(zip(header, row))
-
-
-def sync_variety(wb):
+def sync_variety():
     # VarietyName isn't globally unique on its own (a handful of names are
     # reused across different commodities, e.g. "EUREKA" is both a Blueberry
     # and a Lemon variety) -- Commodity is the range key so both rows survive
-    # instead of one silently overwriting the other.
+    # instead of one silently overwriting the other. Reads Varieties.TPS
+    # directly (Clarion's live source) instead of WhatsAppTables.xlsx's
+    # Variety sheet.
     ensure_table(
         VARIETY_TABLE,
         key_schema=[
@@ -149,110 +194,100 @@ def sync_variety(wb):
         ],
     )
     table = dynamodb.Table(VARIETY_TABLE)
+    tps = TPS(VARIETIES_TPS_PATH, encoding=TPS_ENCODING, cached=True, check=True, current_tablename="UNNAMED")
     count = 0
     with table.batch_writer(overwrite_by_pkeys=["VarietyName", "Commodity"]) as batch:
-        for r in rows(wb["Variety"]):
+        for r in tps:
+            variety_name = clean_tps_field(r.get("b'VAR:VARIETY'"))
+            commodity = clean_tps_field(r.get("b'VAR:COMMODITY'"))
+            if not variety_name or not commodity:
+                continue
             batch.put_item(Item={
-                "VarietyName": normalize_key_text(r["VarietyName"]),
-                "Commodity": normalize_key_text(r["Commodity"]),
-                "VarietyCode": str(r["VarietyCode"]).strip(),
-                "VarietyGroupCode": str(r["VarietyGroupCode"]).strip(),
+                "VarietyName": normalize_key_text(variety_name),
+                "Commodity": normalize_key_text(commodity),
+                "VarietyCode": clean_tps_field(r.get("b'VAR:CODE'")),
+                "VarietyGroupCode": clean_tps_field(r.get("b'VAR:VARIETYGROUP'")),
             })
             count += 1
-    print(f"{VARIETY_TABLE}: loaded {count} rows.")
+    print(f"{VARIETY_TABLE}: loaded {count} rows (from Varieties.TPS).")
 
 
-def sync_variety_group(wb):
+def sync_variety_group():
     # VarietyGroupCode is confirmed globally unique (no two commodities reuse
-    # the same code), so it's a clean single hash key.
+    # the same code), so it's a clean single hash key. Reads VarGrps.TPS
+    # directly. LidlTranslations isn't currently read by lambda_function.py
+    # or the dashboard (checked both) -- kept for whatever it was meant for,
+    # pulled from VG:LIDLDESCRIPTION's RTF via striprtf rather than stored as
+    # raw RTF markup. VG:LIDLDESCRIPTION60MM (a second, smaller-label RTF
+    # variant) isn't synced -- say if you want it added as its own field.
     ensure_table(
         VARIETY_GROUP_TABLE,
         key_schema=[{"AttributeName": "VarietyGroupCode", "KeyType": "HASH"}],
         attribute_definitions=[{"AttributeName": "VarietyGroupCode", "AttributeType": "S"}],
     )
     table = dynamodb.Table(VARIETY_GROUP_TABLE)
+    tps = TPS(VARGRPS_TPS_PATH, encoding=TPS_ENCODING, cached=True, check=True, current_tablename="UNNAMED")
     count = 0
     with table.batch_writer(overwrite_by_pkeys=["VarietyGroupCode"]) as batch:
-        for r in rows(wb["VarietyGroup"]):
+        for r in tps:
+            code = clean_tps_field(r.get("b'VG:CODE'"))
+            if not code:
+                continue
             item = {
-                "VarietyGroupCode": str(r["VarietyGroupCode"]).strip(),
-                "Commodity": str(r["Commodity"]).strip().upper(),
+                "VarietyGroupCode": code,
+                "Commodity": clean_tps_field(r.get("b'VG:COMMODITY'")).upper(),
             }
-            if r.get("LidlTranslations"):
-                item["LidlTranslations"] = str(r["LidlTranslations"]).strip()
+            lidl_translations = clean_tps_rtf_field(r.get("b'VG:LIDLDESCRIPTION'"))
+            if lidl_translations:
+                item["LidlTranslations"] = lidl_translations
             batch.put_item(Item=item)
             count += 1
-    print(f"{VARIETY_GROUP_TABLE}: loaded {count} rows.")
+    print(f"{VARIETY_GROUP_TABLE}: loaded {count} rows (from VarGrps.TPS).")
 
 
-def sync_ian_numbers(wb):
+def sync_ian_numbers():
     # Four columns (Commodity, VarietyGroup, Pack, InventoryCode) make up the
     # real key -- DynamoDB only supports a hash+range key pair, so they're
     # concatenated into a single hash key rather than modeling a composite
-    # range key for what's ultimately just an exact-match lookup.
+    # range key for what's ultimately just an exact-match lookup. Reads
+    # ian.TPS directly.
     ensure_table(
         IAN_NUMBERS_TABLE,
         key_schema=[{"AttributeName": "lookup_key", "KeyType": "HASH"}],
         attribute_definitions=[{"AttributeName": "lookup_key", "AttributeType": "S"}],
     )
     table = dynamodb.Table(IAN_NUMBERS_TABLE)
+    tps = TPS(IAN_TPS_PATH, encoding=TPS_ENCODING, cached=True, check=True, current_tablename="UNNAMED")
     count = 0
     with table.batch_writer(overwrite_by_pkeys=["lookup_key"]) as batch:
-        for r in rows(wb["IANNumbers"]):
-            commodity = str(r["Commodity"]).strip().upper()
-            variety_group = str(r["VarietyGroup"]).strip().upper()
-            pack = str(r["Pack"]).strip().upper()
-            inventory_code = str(r["InventoryCode"]).strip().upper()
+        for r in tps:
+            commodity = clean_tps_field(r.get("b'IAN:COMMODITY'")).upper()
+            variety_group = clean_tps_field(r.get("b'IAN:VARIETYGROUP'")).upper()
+            pack = clean_tps_field(r.get("b'IAN:PACK'")).upper()
+            inventory_code = clean_tps_field(r.get("b'IAN:INVCODE'")).upper()
+            ian_number = clean_tps_field(r.get("b'IAN:IAN'"))
+            if not ian_number:
+                continue
             batch.put_item(Item={
                 "lookup_key": f"{commodity}#{variety_group}#{pack}#{inventory_code}",
                 "Commodity": commodity,
                 "VarietyGroup": variety_group,
                 "Pack": pack,
                 "InventoryCode": inventory_code,
-                "IANNumber": str(int(r["IANNumber"])),
+                "IANNumber": ian_number,
             })
             count += 1
-    print(f"{IAN_NUMBERS_TABLE}: loaded {count} rows.")
+    print(f"{IAN_NUMBERS_TABLE}: loaded {count} rows (from ian.TPS).")
 
 
-def sync_puc(wb):
-    ensure_table(
-        PUC_TABLE,
-        key_schema=[{"AttributeName": "PUC", "KeyType": "HASH"}],
-        attribute_definitions=[{"AttributeName": "PUC", "AttributeType": "S"}],
-    )
-    table = dynamodb.Table(PUC_TABLE)
-    count = 0
-    with table.batch_writer(overwrite_by_pkeys=["PUC"]) as batch:
-        for r in rows(wb["PUC"]):
-            batch.put_item(Item={
-                "PUC": str(r["PUC"]).strip().upper(),
-                "GGN": str(r["GGN"]).strip(),
-            })
-            count += 1
-    print(f"{PUC_TABLE}: loaded {count} rows.")
-
-
-def sync_commodity(wb):
-    ensure_table(
-        COMMODITY_TABLE,
-        key_schema=[{"AttributeName": "Commodity", "KeyType": "HASH"}],
-        attribute_definitions=[{"AttributeName": "Commodity", "AttributeType": "S"}],
-    )
-    table = dynamodb.Table(COMMODITY_TABLE)
-    count = 0
-    with table.batch_writer(overwrite_by_pkeys=["Commodity"]) as batch:
-        for r in rows(wb["Commodity"]):
-            batch.put_item(Item={
-                "Commodity": str(r["Commodity"]).strip().upper(),
-                "CommodityName": str(r["CommodityName"]).strip(),
-                # The source spreadsheet's header calls this "IANNumber" but
-                # confirmed with the user this is actually the Lidl Product
-                # Number (17-char code), not a real IAN number.
-                "LidlProductNumber": str(r["IANNumber"]).strip(),
-            })
-            count += 1
-    print(f"{COMMODITY_TABLE}: loaded {count} rows.")
+# whatsapp-puc and whatsapp-commodity are no longer synced by this script:
+# PUC is already kept current by a separate scheduled job (confirmed with
+# the user 2026-10-01 -- running this script's own version would just race
+# it), and Commodity changes rarely enough that it's maintained by hand via
+# the dashboard's Reference Tables tab instead. If either ever needs this
+# script's help again, the old xlsx-reading implementations are in git
+# history (both read from WhatsAppTables.xlsx's PUC/Commodity sheets, same
+# ensure_table()/batch_writer() shape as the functions above).
 
 
 def sync_rewe_combinations():
@@ -291,95 +326,99 @@ def split_name_and_address(address1, *rest_lines):
     return importer_name, address_lines
 
 
-def sync_agent_addresses(xlsx_path=INDIA_ADDRESSES_XLSX_PATH):
+def sync_agent_addresses():
     # Started as India-only (17C's consignee/agent code -> name, 3-line
     # address, FSSAI license number), generalized 2026-09-10 once 17A
     # (Malaysia) needed the exact same shape (agent code -> importer name +
     # address) -- renamed from whatsapp-india-addresses to this generic name.
-    # The India rows come from a separate xlsx (not WhatsAppTables.xlsx,
-    # since it's not Dole-global); sync_general_agents() below loads the
-    # non-India rows from a second, separate sheet into the same table.
+    # Reads InvCode.TPS directly (Clarion's live source for this data, not a
+    # manually re-exported snapshot) -- sync_general_agents() below loads the
+    # non-India rows from Customers.TPS into the same table.
     #
     # Only ImporterName/AddressLines (the split results) and FSSAI are
-    # actually referenced by any validation config -- the raw Address1/
-    # Address2/Address3/FullAddress components aren't kept in the table at
-    # all, deliberately: this table is hand-editable via the dashboard's
-    # Reference Tables tab, and keeping unused raw fields alongside the
-    # derived ones they were split from would let someone edit one without
-    # the other, silently drifting the two out of sync.
+    # actually referenced by any validation config -- the raw address
+    # components aren't kept in the table at all, deliberately: this table is
+    # hand-editable via the dashboard's Reference Tables tab, and keeping
+    # unused raw fields alongside the derived ones they were split from would
+    # let someone edit one without the other, silently drifting the two out
+    # of sync.
     ensure_table(
         AGENT_ADDRESSES_TABLE,
         key_schema=[{"AttributeName": "Code", "KeyType": "HASH"}],
         attribute_definitions=[{"AttributeName": "Code", "AttributeType": "S"}],
     )
-    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     table = dynamodb.Table(AGENT_ADDRESSES_TABLE)
+    tps = TPS(INVCODE_TPS_PATH, encoding=TPS_ENCODING, cached=True, check=True, current_tablename="UNNAMED")
     count = 0
     with table.batch_writer(overwrite_by_pkeys=["Code"]) as batch:
-        for r in rows(wb["Addresses"]):
-            code = normalize_key_text(r["Code"])
-            if code in INDIA_DUPLICATE_CODES_TO_SKIP:
+        for r in tps:
+            code = normalize_key_text(clean_tps_field(r.get("b'INV:CODE'")))
+            if not code or code in INDIA_DUPLICATE_CODES_TO_SKIP:
                 continue
-            address2 = str(r["Address2"]).strip()
-            address3 = str(r["Inv: IndianAddress3"]).strip()
-            importer_name, address_lines = split_name_and_address(str(r["Address1"]).strip(), address2, address3)
+            address1 = clean_tps_field(r.get("b'INV:INDIANADDRESS'"))
+            address2 = clean_tps_field(r.get("b'INV:INDIANADDRESS2'"))
+            address3 = clean_tps_field(r.get("b'INV:INDIANADDRESS3'"))
+            fssai = clean_tps_field(r.get("b'INV:INDIANFSSAINR'"))
+            importer_name, address_lines = split_name_and_address(address1, address2, address3)
             item = {
                 "Code": code,
                 "ImporterName": importer_name,
                 "AddressLines": address_lines,
             }
-            if r.get("FSSAI"):
-                item["FSSAI"] = str(r["FSSAI"]).strip()
+            if fssai:
+                item["FSSAI"] = fssai
             batch.put_item(Item=item)
             count += 1
-    print(f"{AGENT_ADDRESSES_TABLE}: loaded {count} India rows.")
+    print(f"{AGENT_ADDRESSES_TABLE}: loaded {count} India rows (from InvCode.TPS).")
 
 
-def sync_general_agents(xlsx_path=AGENTS_XLSX_PATH):
+def sync_general_agents():
     # Non-India agent/importer codes (Malaysia's 17A and onward) -- same
     # table, same Code/ImporterName/AddressLines shape as the India loader
-    # above, just a different source sheet (Code/Customer/Address1-4, no
-    # FSSAI). "Customer" is a short internal nickname (e.g. "CHOP TONG"),
-    # not what's printed on a real label -- Address1 carries the full legal
-    # company name instead (confirmed against a real 17A photo: agent "5K"'s
-    # Address1 "T&T FRESH SDN BHD" is exactly what the label prints), so
-    # Address1 feeds ImporterName via the same split_name_and_address() used
-    # for India, not the Customer column.
+    # above, just a different source table (Customers.TPS: CUS:CODE,
+    # CUS:CUSTOMER, CUS:ADDRESS1-4, no FSSAI). "Customer" is a short internal
+    # nickname (e.g. "CHOP TONG"), not what's printed on a real label --
+    # Address1 carries the full legal company name instead (confirmed
+    # against a real 17A photo: agent "5K"'s Address1 "T&T FRESH SDN BHD" is
+    # exactly what the label prints), so Address1 feeds ImporterName via the
+    # same split_name_and_address() used for India, not CUS:CUSTOMER.
+    #
+    # Runs after sync_agent_addresses() (same order as before this read from
+    # TPS directly) so Customers.TPS wins on the one known Code overlap
+    # between the two sources (code "LM" / FRESHPRO INTERNATIONAL, present
+    # in both as the same company -- not a conflict like the historical "XX"
+    # case below, just keeping today's precedence unchanged on principle).
     ensure_table(
         AGENT_ADDRESSES_TABLE,
         key_schema=[{"AttributeName": "Code", "KeyType": "HASH"}],
         attribute_definitions=[{"AttributeName": "Code", "AttributeType": "S"}],
     )
-    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     table = dynamodb.Table(AGENT_ADDRESSES_TABLE)
+    tps = TPS(CUSTOMERS_TPS_PATH, encoding=TPS_ENCODING, cached=True, check=True, current_tablename="UNNAMED")
     count = 0
     with table.batch_writer(overwrite_by_pkeys=["Code"]) as batch:
-        for r in rows(wb["Agents"]):
-            address2 = str(r.get("Address2") or "").strip()
-            address3 = str(r.get("Address3") or "").strip()
-            address4 = str(r.get("Address4") or "").strip()
-            importer_name, address_lines = split_name_and_address(
-                str(r["Address1"]).strip(), address2, address3, address4
-            )
+        for r in tps:
+            code = normalize_key_text(clean_tps_field(r.get("b'CUS:CODE'")))
+            if not code:
+                continue
+            address1 = clean_tps_field(r.get("b'CUS:ADDRESS1'"))
+            address2 = clean_tps_field(r.get("b'CUS:ADDRESS2'"))
+            address3 = clean_tps_field(r.get("b'CUS:ADDRESS3'"))
+            address4 = clean_tps_field(r.get("b'CUS:ADDRESS4'"))
+            importer_name, address_lines = split_name_and_address(address1, address2, address3, address4)
             batch.put_item(Item={
-                "Code": normalize_key_text(r["Code"]),
+                "Code": code,
                 "ImporterName": importer_name,
                 "AddressLines": address_lines,
             })
             count += 1
-    print(f"{AGENT_ADDRESSES_TABLE}: loaded {count} general-agent rows.")
+    print(f"{AGENT_ADDRESSES_TABLE}: loaded {count} general-agent rows (from Customers.TPS).")
 
 
 def main():
-    xlsx_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_XLSX_PATH
-    print(f"Loading {xlsx_path} ...")
-    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
-
-    sync_variety(wb)
-    sync_variety_group(wb)
-    sync_ian_numbers(wb)
-    sync_puc(wb)
-    sync_commodity(wb)
+    sync_variety()
+    sync_variety_group()
+    sync_ian_numbers()
     sync_rewe_combinations()
     sync_agent_addresses()
     sync_general_agents()
