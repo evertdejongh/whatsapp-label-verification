@@ -298,6 +298,14 @@ def get_presigned_url(key):
         return None
 
 
+def open_file_link(token, key):
+    """A click-through link that resolves to a fresh presigned URL at click
+    time (via the 'open' view below), instead of baking one in at render
+    time -- a dashboard tab left open past IMAGE_URL_TTL_SECONDS would
+    otherwise click through to an expired, AccessDenied URL."""
+    return f"?token={html_escape(token)}&view=open&key={urllib.parse.quote(key)}"
+
+
 def html_escape(value):
     return (
         str(value)
@@ -361,9 +369,10 @@ def render_audit_log(items, counts, filters, next_key):
     for item in items:
         result = item.get('result', '')
         color, icon = RESULT_STYLES.get(result, ('#6b7280', '•'))
-        image_url = get_presigned_url(item.get('image_key'))
+        image_key = item.get('image_key')
+        image_url = get_presigned_url(image_key)
         image_cell = (
-            f"<a href='{html_escape(image_url)}' target='_blank' rel='noopener'>"
+            f"<a href='{html_escape(open_file_link(filters['token'], image_key))}' target='_blank' rel='noopener'>"
             f"<img class='thumb' src='{html_escape(image_url)}' loading='lazy' alt='label photo'></a>"
         ) if image_url else ""
         rows.append(
@@ -554,11 +563,11 @@ def scan_spec_catalog():
 EDIT_FORM_ID = "catalog-edit-form"
 
 
-def render_view_row(item):
+def render_view_row(token, item):
     spec_code = item.get('spec_code', '')
     pdf_key = item.get('pdf_s3_key')
     pdf_url = get_presigned_url(pdf_key)
-    pdf_cell = f"<a class='pill yes' href='{html_escape(pdf_url)}' target='_blank' rel='noopener'>PDF &#10003;</a>" if pdf_url else "<span class='pill no'>No PDF</span>"
+    pdf_cell = f"<a class='pill yes' href='{html_escape(open_file_link(token, pdf_key))}' target='_blank' rel='noopener'>PDF &#10003;</a>" if pdf_url else "<span class='pill no'>No PDF</span>"
     return (
         f"<tr class='selectable' data-code='{html_escape(spec_code)}'>"
         f"<td>{html_escape(spec_code)}</td>"
@@ -609,7 +618,7 @@ def render_catalog(token, items, edit_item, adding_new, error):
         if edit_code and item.get('spec_code') == edit_code:
             rows.append(render_edit_row(token, item=item, is_new=False))
         else:
-            rows.append(render_view_row(item))
+            rows.append(render_view_row(token, item))
 
     error_html = f"<div class='error'>{html_escape(error)}</div>" if error else ""
     token_esc = html_escape(token)
@@ -1296,10 +1305,9 @@ def render_file_row(token, spec_code, f, editing, error=None, content_override=N
     thumb = ""
     if is_image:
         url = get_presigned_url(key)
-        thumb = f"<a href='{html_escape(url)}' target='_blank' rel='noopener'><img class='thumb' style='height:70px' src='{html_escape(url)}' loading='lazy'></a>"
+        thumb = f"<a href='{html_escape(open_file_link(token, key))}' target='_blank' rel='noopener'><img class='thumb' style='height:70px' src='{html_escape(url)}' loading='lazy'></a>"
     elif filename.endswith('.pdf'):
-        url = get_presigned_url(key)
-        thumb = f"<a class='pill yes' href='{html_escape(url)}' target='_blank' rel='noopener'>PDF &#10003;</a>"
+        thumb = f"<a class='pill yes' href='{html_escape(open_file_link(token, key))}' target='_blank' rel='noopener'>PDF &#10003;</a>"
 
     actions = []
     if is_json:
@@ -1653,7 +1661,15 @@ def lambda_handler(event, context):
         return text_response(401, 'Unauthorized. Append ?token=<your dashboard token> to the URL.')
 
     try:
-        if view == 'catalog':
+        if view == 'open':
+            key = query_params.get('key', '').strip()
+            if not key:
+                return text_response(400, 'Missing key')
+            url = get_presigned_url(key)
+            if not url:
+                return text_response(404, 'File not found')
+            return redirect_response(url)
+        elif view == 'catalog':
             if http_method == 'POST':
                 return handle_catalog_post(token, form, format_=format_)
             return handle_catalog_get(token, query_params, format_=format_)
