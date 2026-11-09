@@ -30,6 +30,10 @@
     {
       "name": "Origin statement",
       "pattern": "URSPRUNG\\s*:?\\s*S.DAFRIKA"
+    },
+    {
+      "name": "E4711 marking",
+      "pattern": "E4711"
     }
   ],
   "lookup_rules": [
