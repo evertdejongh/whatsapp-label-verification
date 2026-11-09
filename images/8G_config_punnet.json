@@ -1,0 +1,94 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "PUC": null,
+    "Variety": null,
+    "GGN": "the 13-digit GGN number printed on the label",
+    "LotNumber": "the lot/batch code printed on the label (e.g. 'L 46 - 01')",
+    "VarietyGroup": "the produce variety group / commodity name printed on the label (e.g. 'Trauben Hell Kernlos')",
+    "GTIN": "the 13-digit GTIN printed below the barcode graphic -- if it is preceded by a GS1 Application Identifier in parentheses, e.g. '(01)', that parenthetical AI is NOT part of the GTIN and must be excluded, transcribe only the 13 digits"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "GTIN",
+      "name": "GTIN",
+      "expected_pattern": "^(\\(\\d{2}\\)\\s*)?4311"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number"
+    },
+    {
+      "field": "VarietyGroup",
+      "name": "Variety Group printed on label"
+    }
+  ],
+  "full_label_checks": [
+    {
+      "name": "Origin statement",
+      "pattern": "URSPRUNG\\s*:?\\s*S.DAFRIKA"
+    },
+    {
+      "name": "Class statement",
+      "pattern": "KLASSE\\s*:?\\s*I\\b"
+    },
+    {
+      "name": "Abgepackt von heading",
+      "pattern": "ABGEPAC?KT\\s+VON\\s*:?"
+    },
+    {
+      "name": "Street address",
+      "pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD\\s*[,.]?\\s*26\\s+BELLA\\s+ROSA\\s+STREET\\s*[,.]?\\s*BELLVILLE\\s*[,.]?\\s*7530\\s*[,.]?\\s*S.DAFRIKA\\s*\\(5285319\\)\\s*[,.]?\\s*GLN\\s*6009644340002"
+    },
+    {
+      "name": "EDEKA line",
+      "pattern": "F.R\\s*:?\\s*EDEKA\\s+ZENTRALE\\s*[,.]?\\s*STIFTUNG\\s*&\\s*CO\\.?\\s*KG\\s*[,.]?\\s*D-?\\s*22291\\s*[,.]?\\s*HAMBURG"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    },
+    {
+      "name": "EDEKA GTIN / Variety cross-check",
+      "table": "whatsapp-edeka-gtins",
+      "scan_match": {
+        "match_fields": [
+          {"source": "field:GTIN", "attribute": "GTINpunnet", "fuzzy_min_score": 0.92},
+          {"source": "result:variety.VarietyGroupCode", "attribute": "VarietyGroupCode", "fuzzy_min_score": 0.99}
+        ]
+      }
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Printed variety group heading matches variety's registered group",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "VarietyGroup",
+      "tag_by_variety_group": {
+        "WS": "TRAUBEN HELL KERNLOS",
+        "RS": "TRAUBEN ROT KERNLOS"
+      }
+    }
+  ]
+}
