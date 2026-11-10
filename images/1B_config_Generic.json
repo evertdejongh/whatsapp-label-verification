@@ -1,0 +1,64 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "PUC": null,
+    "Variety": null,
+    "GGN": "the 13-digit GGN number printed on the label",
+    "LotNumber": "the lot/batch code printed on the label",
+    "Barcode": "the 13-digit number printed beneath the barcode graphic on the label"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number"
+    },
+    {
+      "field": "Barcode",
+      "name": "Barcode",
+      "expected_pattern": "\\b\\d{13}\\b"
+    }
+  ],
+  "full_label_checks": [
+    {
+      "name": "Dole South Africa address",
+      "pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD\\s*[,.]?\\s*26\\s+BELLA\\s+ROSA\\s+STREET\\s*[,.]?\\s*BELLVILLE\\s*[,.]?\\s*7530\\s*[,.]?\\s*SOUTH\\s+AFRICA\\s*[,.]?\\s*GLN\\s*:?\\s*6009644340002"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Barcode matches variety's registered group",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "Barcode",
+      "tag_by_variety_group": {
+        "WS": "6009644340651",
+        "RS": "6009644340644",
+        "BS": "6009644340668"
+      }
+    }
+  ]
+}

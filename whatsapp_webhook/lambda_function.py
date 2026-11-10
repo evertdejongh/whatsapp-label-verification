@@ -2123,12 +2123,19 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             if not expected_tag:
                 failed_zones.append(f"{check_name} (Variety group '{variety_group_code}' not allowed for this spec)")
                 continue
+            # A variety group can map to more than one acceptable tag -- e.g.
+            # an old and a new print run of the same label using different
+            # overprint codes for the same variety group, both still in
+            # circulation -- so this accepts either a single string or a
+            # list of acceptable strings, matching if any one is found.
+            expected_tags = [expected_tag] if isinstance(expected_tag, str) else expected_tag
 
             field_name = check.get("field")
             actual_value = extracted_fields.get(field_name)
             actual_text = normalize_zone_text([str(actual_value)]).upper() if actual_value else ""
-            if not content_matches(expected_tag.upper(), actual_text):
-                failed_zones.append(f"{check_name} (Expected '{expected_tag}', label shows '{actual_value}')")
+            if not any(content_matches(tag.upper(), actual_text) for tag in expected_tags):
+                expected_display = " or ".join(f"'{tag}'" for tag in expected_tags)
+                failed_zones.append(f"{check_name} (Expected {expected_display}, label shows '{actual_value}')")
             else:
                 passed_zones += 1
                 passed_zone_names.append(check_name)

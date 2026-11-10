@@ -5,7 +5,9 @@
     "Variety": null,
     "GGN": "the 13-digit GGN number printed on the label",
     "LotNumber": "the lot/batch code printed on the label (e.g. 'L 48 - 13')",
-    "VarietyGroup": "the produce variety group / commodity name printed on the label (e.g. 'Tafeltrauben, Rot')"
+    "VarietyGroup": "the produce variety group / commodity name printed on the label (e.g. 'Tafeltrauben, Rot')",
+    "GTIN": "the 13-digit GTIN printed below the barcode graphic -- if it is preceded by a GS1 Application Identifier in parentheses, e.g. '(01)', that parenthetical AI is NOT part of the GTIN and must be excluded, transcribe only the 13 digits",
+    "ChargenSerienNr": "the 'Chargen-/Serien-Nr' code printed vertically next to the barcode, e.g. 'EDGG001'"
   },
   "field_checks": [
     {
@@ -14,12 +16,22 @@
       "expected_pattern": "\\b\\d{13}\\b"
     },
     {
+      "field": "GTIN",
+      "name": "GTIN",
+      "expected_pattern": "^(\\(\\d{2}\\)\\s*)?4311"
+    },
+    {
       "field": "LotNumber",
       "name": "Lot number"
     },
     {
       "field": "VarietyGroup",
       "name": "Variety Group printed on label"
+    },
+    {
+      "field": "ChargenSerienNr",
+      "name": "Chargen-/Serien-Nr code",
+      "expected_pattern": "^EDGG00[1-6]$"
     }
   ],
   "lookup_rules": [
@@ -40,6 +52,16 @@
       },
       "query": true,
       "store_as": "variety"
+    },
+    {
+      "name": "EDEKA GTIN / Variety cross-check",
+      "table": "whatsapp-edeka-gtins",
+      "scan_match": {
+        "match_fields": [
+          {"source": "field:GTIN", "attribute": "GTINpunnet", "fuzzy_min_score": 0.92},
+          {"source": "result:variety.VarietyGroupCode", "attribute": "VarietyGroupCode", "fuzzy_min_score": 0.99}
+        ]
+      }
     }
   ],
   "allowed_variety_group_checks": [
@@ -47,6 +69,18 @@
       "name": "Allowed variety group",
       "variety_group_source": "result:variety.VarietyGroupCode",
       "allowed": ["WS", "RS"]
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Chargen-/Serien-Nr code matches variety group (old or new label)",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "ChargenSerienNr",
+      "tag_by_variety_group": {
+        "WS": ["EDGG001", "EDGG004"],
+        "RS": ["EDGG002", "EDGG005"],
+        "BS": ["EDGG003", "EDGG006"]
+      }
     }
   ]
 }
