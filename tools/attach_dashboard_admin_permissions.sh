@@ -26,6 +26,7 @@ TABLES=(
   "whatsapp-commodity"
   "whatsapp-rewe-combinations"
   "whatsapp-agent-addresses"
+  "whatsapp-edeka-gtins"
 )
 
 ROLE_ARN=$(aws lambda get-function-configuration \

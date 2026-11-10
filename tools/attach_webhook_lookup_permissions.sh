@@ -2,11 +2,12 @@
 # Grants the whatsapp-label-verifier Lambda's execution role read-only
 # access to the new reference-data tables used for cross-table label
 # validation (PUC -> GGN, Variety -> Variety Group/Commodity, etc). The
-# webhook does point lookups (GetItem) plus a partition-key Query on the
+# webhook does point lookups (GetItem), a partition-key Query on the
 # Variety table (VarietyName alone can return more than one commodity's
-# row, disambiguated by the caller) -- no Scan/Put/Delete, unlike the
-# dashboard's catalog-management policy. Looks up the role automatically
-# from the live function config.
+# row, disambiguated by the caller), and a full Scan for "scan_match" rules
+# (e.g. EDEKA GTINs, where a punnet label prints no code to key off of) --
+# no Put/Delete, unlike the dashboard's catalog-management policy. Looks up
+# the role automatically from the live function config.
 #
 # Safe to re-run -- put-role-policy overwrites the named inline policy
 # each time.
@@ -25,6 +26,7 @@ TABLES=(
   "whatsapp-commodity"
   "whatsapp-rewe-combinations"
   "whatsapp-agent-addresses"
+  "whatsapp-edeka-gtins"
 )
 
 ROLE_ARN=$(aws lambda get-function-configuration \
@@ -53,7 +55,8 @@ cat > "${POLICY_FILE}" <<POLICY
       "Effect": "Allow",
       "Action": [
         "dynamodb:GetItem",
-        "dynamodb:Query"
+        "dynamodb:Query",
+        "dynamodb:Scan"
       ],
       "Resource": [${RESOURCES_JSON}]
     }

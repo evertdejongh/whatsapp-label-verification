@@ -1,0 +1,31 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReferenceTablesAdminAccess",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:Scan",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": ["arn:aws:dynamodb:us-east-2:677513501349:table/whatsapp-puc","arn:aws:dynamodb:us-east-2:677513501349:table/whatsapp-variety","arn:aws:dynamodb:us-east-2:677513501349:table/whatsapp-variety-group","arn:aws:dynamodb:us-east-2:677513501349:table/whatsapp-ian-numbers","arn:aws:dynamodb:us-east-2:677513501349:table/whatsapp-commodity","arn:aws:dynamodb:us-east-2:677513501349:table/whatsapp-rewe-combinations","arn:aws:dynamodb:us-east-2:677513501349:table/whatsapp-agent-addresses","arn:aws:dynamodb:us-east-2:677513501349:table/whatsapp-edeka-gtins"]
+    },
+    {
+      "Sid": "SpecFilesListAccess",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::dole-pallet-specs-2026-677513501349-us-east-2-an",
+      "Condition": {
+        "StringLike": { "s3:prefix": "specs/*" }
+      }
+    },
+    {
+      "Sid": "SpecFilesObjectAccess",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::dole-pallet-specs-2026-677513501349-us-east-2-an/specs/*"
+    }
+  ]
+}

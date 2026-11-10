@@ -48,6 +48,7 @@ TABLE_REGISTRY = {
     "whatsapp-commodity": ["Commodity"],
     "whatsapp-rewe-combinations": ["lookup_key"],
     "whatsapp-agent-addresses": ["Code"],
+    "whatsapp-edeka-gtins": ["lookup_key"],
 }
 
 # Columns that are the table's key but are a synthetic/derived composite

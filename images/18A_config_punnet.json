@@ -1,0 +1,85 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "PUC": null,
+    "Variety": "the full variety name printed next to 'VARIETÀ:', exactly as printed -- include BOTH the code name and any trade name in brackets, plus any ®/™ symbol, e.g. 'SUGRATWELVE (COACHELLA SEEDLESS®)'. Never return just the part in brackets",
+    "GGN": "the 13-digit GGN number printed on the label",
+    "Lotto": "the 4-digit code printed next to 'LOTTO:'",
+    "UvaLine": "the Italian product-type line printed in the white information panel, directly above the 'VARIETÀ:' line -- copy it exactly as printed, e.g. 'UVA DA TAVOLA BIANCA SENZA SEMI' or 'UVA DA TAVOLA ROSSA SENZA SEMI'",
+    "VarietyGroupPrinted": "based on that same Italian product-type line (reading either 'UVA DA TAVOLA BIANCA SENZA SEMI' for white grapes or 'UVA DA TAVOLA ROSSA SENZA SEMI' for red grapes), return exactly 'WS' if it reads BIANCA (white), or exactly 'RS' if it reads ROSSA (red)",
+    "BackgroundColor": "the background colour of the top half of the label, behind the Dole logo and 'UVA DA TAVOLA' heading -- respond with exactly 'PURPLE' if it is purple/magenta, or exactly 'GREEN' if it is green",
+    "PackedByText": "the full sentence beginning 'Imballato da Dole South Africa...' through to the 'ITA0003634' registration code at the bottom of the label -- copy it exactly as printed as one continuous string, even though it wraps across several lines"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "Lotto",
+      "name": "Lotto printed"
+    },
+    {
+      "field": "UvaLine",
+      "name": "Uva line wording",
+      "expected_pattern": "^(UVA\\s+DA\\s+TAVOLA\\s+BIANCA\\s+SENZA\\s+SEMI|UVA\\s+DA\\s+TAVOLA\\s+ROSSA\\s+SENZA\\s+SEMI)$"
+    },
+    {
+      "field": "VarietyGroupPrinted",
+      "name": "Variety group classification",
+      "expected_pattern": "^(WS|RS)$"
+    },
+    {
+      "field": "BackgroundColor",
+      "name": "Background colour",
+      "expected_pattern": "^(GREEN|PURPLE)$"
+    },
+    {
+      "field": "PackedByText",
+      "name": "Packed by text",
+      "expected_pattern": "IMBALLATO\\s+DA\\s+DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD\\s*-\\s*STABILIMENTO\\s+DI\\s+[\\s\\S]+?\\(SUDAFRICA\\)\\s*PER\\s+CONTO\\s+DI\\s+DOLE\\s+ITALIA\\s+S\\.?R\\.?L\\.?\\s*B\\.?D\\.?N\\.?O\\.?O\\.?\\s*ITA0003634"
+    }
+  ],
+  "conditional_pattern_checks": [
+    {
+      "name": "Background colour matches variety group",
+      "field": "BackgroundColor",
+      "condition_field": "VarietyGroupPrinted",
+      "patterns_by_condition": {
+        "WS": "^GREEN$",
+        "RS": "^PURPLE$"
+      }
+    }
+  ],
+  "week_day_code_checks": [
+    {
+      "name": "Lotto week/day validation",
+      "field": "Lotto",
+      "length": 4,
+      "week_digit_indices": [0, 1],
+      "day_digit_indices": [2, 3]
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Printed variety group matches variety's registered group",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "compare_attribute": "VarietyGroupCode",
+      "compare_zone": "VarietyGroupPrinted"
+    }
+  ]
+}

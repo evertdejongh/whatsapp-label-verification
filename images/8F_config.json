@@ -82,5 +82,26 @@
       "name": "Exported by address",
       "pattern": "EXPORTED\\s+BY\\s*:?\\s*DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD\\s*[,.]?\\s*26\\s+BELLA\\s+ROSA.{0,20}?\\s*[,.]?\\s*[D0].{0,2}URBAN\\s+SQUARE\\s*[,.]?\\s*CAPE\\s+TOWN\\s*7530"
     }
+  ],
+  "lookup_rules": [
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    },
+    {
+      "name": "EDEKA GTIN / Variety cross-check",
+      "table": "whatsapp-edeka-gtins",
+      "scan_match": {
+        "match_fields": [
+          {"source": "field:GTIN", "attribute": "GTINcarton", "fuzzy_min_score": 0.92},
+          {"source": "result:variety.VarietyGroupCode", "attribute": "VarietyGroupCode", "fuzzy_min_score": 0.99}
+        ]
+      }
+    }
   ]
 }
