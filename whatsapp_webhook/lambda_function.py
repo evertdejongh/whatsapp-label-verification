@@ -40,7 +40,7 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 # specs/{spec_code}_label_{suffix}.png -- a spec with neither file behaves
 # exactly as before. "Generic" is 15A's fallback design for an agent with no
 # dedicated reference photo of their own yet.
-LABEL_VARIANT_SUFFIXES = ["punnet", "punnet_mix", "33", "39", "5D", "WV", "XU", "YE", "Generic", "pallet"]
+LABEL_VARIANT_SUFFIXES = ["punnet", "punnet_mix", "33", "39", "5D", "WV", "XU", "YE", "Generic", "pallet", "big", "small"]
 
 # Shown on every real PASS/FAIL result (not on early exits like "wrong spec
 # code" or "config not found", where no actual layout check happened) --
@@ -1144,23 +1144,55 @@ def detect_zone_lines_vision_llm(crop_bytes, api_key):
         return []
 
 
+class GeminiExtractionError(Exception):
+    """
+    Raised by call_gemini_for_json when every retry attempt failed to
+    produce a usable result -- distinct from a plain Exception so callers
+    can tell "the extraction service itself failed" (worth telling the user
+    to just resend) apart from a genuine code bug.
+    """
+    pass
+
+
 def call_gemini_for_json(image_bytes, prompt, api_key):
     """
     Shared plumbing for extract_label_fields/extract_label_text_blocks: calls
     Gemini, strips the markdown code-fence wrapping some responses add
     despite being asked not to, and parses the result as a JSON object of
     string values.
+
+    Retries the whole call+parse a few times, not just the HTTP request:
+    during a Gemini overload spike (confirmed live 2026-11-12, a 503 "high
+    demand" error), a later attempt can come back 200 OK with a body that
+    isn't valid JSON (a prose apology instead of the requested JSON object)
+    -- _call_gemini's own 5xx retry loop doesn't see that case since the
+    HTTP status was fine. Treating a malformed response as just as worth
+    retrying as a 5xx closes that gap.
     """
-    response_text = call_gemini_vision(image_bytes, prompt, api_key, mime_type='image/jpeg')
-    if not response_text:
-        return {}
+    max_attempts = 3
+    last_error = "no response"
+    for attempt in range(max_attempts):
+        response_text = call_gemini_vision(image_bytes, prompt, api_key, mime_type='image/jpeg')
+        if response_text:
+            cleaned = response_text.strip().strip('`')
+            if cleaned.lower().startswith('json'):
+                cleaned = cleaned[4:].strip()
+            try:
+                parsed = json.loads(cleaned)
+                return {k: (v.strip() if isinstance(v, str) else v) for k, v in parsed.items()}
+            except json.JSONDecodeError as e:
+                last_error = f"non-JSON response: {str(e)}"
+        else:
+            last_error = "empty response"
 
-    cleaned = response_text.strip().strip('`')
-    if cleaned.lower().startswith('json'):
-        cleaned = cleaned[4:].strip()
+        if attempt < max_attempts - 1:
+            logger.error(
+                f"Gemini JSON extraction attempt {attempt + 1}/{max_attempts} failed "
+                f"({last_error}), retrying"
+            )
+            time.sleep(3)
 
-    parsed = json.loads(cleaned)
-    return {k: (v.strip() if isinstance(v, str) else v) for k, v in parsed.items()}
+    raise GeminiExtractionError(f"Gemini JSON extraction failed after {max_attempts} attempts: {last_error}")
 
 
 EXTRACT_FIELDS_PROMPT_TEMPLATE = (
@@ -1209,6 +1241,8 @@ def extract_label_fields(image_bytes, field_specs, api_key):
         )
         prompt = EXTRACT_FIELDS_PROMPT_TEMPLATE.format(field_list=field_list)
         return call_gemini_for_json(image_bytes, prompt, api_key)
+    except GeminiExtractionError:
+        raise
     except Exception as e:
         logger.error(f"Vision LLM field extraction failed: {str(e)}")
         return {}
@@ -1246,6 +1280,8 @@ def check_label_logos(image_bytes, logo_specs, api_key):
         logo_list = "\n".join(f'- "{name}": {desc}' for name, desc in logo_specs.items())
         prompt = LOGO_CHECK_PROMPT_TEMPLATE.format(logo_list=logo_list)
         return call_gemini_for_json(image_bytes, prompt, api_key)
+    except GeminiExtractionError:
+        raise
     except Exception as e:
         logger.error(f"Vision LLM logo check failed: {str(e)}")
         return {}
@@ -1289,6 +1325,8 @@ def extract_label_text_blocks(image_bytes, block_prompts, api_key):
         block_list = "\n".join(f'- "{name}": {desc}' for name, desc in block_prompts.items())
         prompt = TEXT_BLOCK_PROMPT_TEMPLATE.format(block_list=block_list)
         return call_gemini_for_json(image_bytes, prompt, api_key)
+    except GeminiExtractionError:
+        raise
     except Exception as e:
         logger.error(f"Vision LLM text block extraction failed: {str(e)}")
         return {}
@@ -2426,6 +2464,22 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
                 f"{LAYOUT_CHECK_DISCLAIMER}"
             ), zone_content
 
+    except GeminiExtractionError as e:
+        # Distinguished from the generic except below so a transient
+        # extraction-service outage (e.g. Gemini 503 "high demand", seen
+        # live 2026-11-12 -- an identical resend by a different user passed
+        # cleanly 5 minutes later) doesn't get reported as a label defect.
+        # A flood of confusing "Missing / Empty" lines for a photo that's
+        # actually fine erodes trust in the bot far more than asking for a
+        # resend does.
+        logger.error(f"Gemini extraction service failure during layout check: {str(e)}")
+        return "ERROR", (
+            f"⚠️ *Verification Service Busy*\n\n"
+            f"• Spec Reference: *{spec_code}*\n"
+            f"• Our label-reading service is temporarily overloaded and couldn't "
+            f"read your photo this time -- this isn't a problem with your label.\n\n"
+            f"_Please resend the same photo in a minute or two._"
+        ), {}
     except Exception as e:
         logger.error(f"Targeted layout content comparison failed: {str(e)}")
         return "ERROR", f"❌ *Layout Verification FAILED*\n\n• Spec Reference: *{spec_code}*\n• Reason: Error performing block layout comparison.", {}
