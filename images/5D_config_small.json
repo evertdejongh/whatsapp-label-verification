@@ -1,0 +1,100 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "PUC": null,
+    "Variety": null,
+    "GGN": "the 13-digit GGN number printed on the label",
+    "Pack": null,
+    "InventoryCode": "the value printed next to the 'Inv Code' heading",
+    "Brand": "the value printed next to the 'Brand/Mark' heading",
+    "BerrySize": "the value printed next to the 'Berry Size' heading",
+    "VarietyGroupLine": "the pre-printed variety group / commodity name shown in English AND German on the label (e.g. 'White Seedless' and 'Trauben Hell Kernlos'), whether on two stacked lines near the top of the label or combined on one line beneath 'Variety/Sorte' -- transcribe both language versions exactly as printed"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "Pack",
+      "name": "Allowed Pack code",
+      "expected_pattern": "^A05D$"
+    },
+    {
+      "field": "InventoryCode",
+      "name": "Allowed Inventory code",
+      "expected_pattern": "^AA$"
+    },
+    {
+      "field": "Brand",
+      "name": "Allowed Brand",
+      "expected_pattern": "^BLACK$"
+    },
+    {
+      "field": "BerrySize",
+      "name": "Allowed Berry Size",
+      "expected_pattern": "^(REGULAR|L|XL)$"
+    }
+  ],
+  "full_label_checks": [
+    {
+      "name": "Origin statement (English)",
+      "pattern": "ORIGIN\\s*:?\\s*SOUTH\\s+AFRICA"
+    },
+    {
+      "name": "Origin statement (German)",
+      "pattern": "URSPRUNG\\s*:?\\s*S.DAFRIKA"
+    },
+    {
+      "name": "Imported by address",
+      "pattern": "IMPORTED\\s+BY\\s*:?\\s*DOLE\\s+EUROPE\\s+GMBH.{0,5}STADTDEICH\\s*7.{0,5}20097\\s+HAMBURG.{0,5}GERMANY.{0,10}GLN\\s*:?\\s*4014071000001"
+    },
+    {
+      "name": "Exported by address",
+      "pattern": "DOLE\\s+SOUTH\\s+AFRICA\\s*\\(PTY\\)\\s*LTD\\s*,?\\s*26\\s+BELLA\\s+ROSA\\s+STREET\\s*,?\\s*BELLVILLE\\s*,?\\s*7530\\s*,?\\s*SOUTH\\s+AFRICA\\s*,?\\s*GLN\\s*:?\\s*6009644340002"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "PUC / GGN cross-check",
+      "table": "whatsapp-puc",
+      "key": {
+        "PUC": "field:PUC"
+      },
+      "compare_attribute": "GGN",
+      "compare_zone": "GGN"
+    },
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Variety group printed (English)",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "VarietyGroupLine",
+      "tag_by_variety_group": {
+        "WS": "WHITE SEEDLESS",
+        "RS": "RED SEEDLESS",
+        "BS": "BLACK SEEDLESS"
+      }
+    },
+    {
+      "name": "Variety group printed (German)",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "VarietyGroupLine",
+      "tag_by_variety_group": {
+        "WS": "TRAUBEN HELL KERNLOS",
+        "RS": "TRAUBEN ROT KERNLOS",
+        "BS": "TRAUBEN BLAU KERNLOS"
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "layout_agnostic": true,
+  "extract_fields": {
+    "Variety": null,
+    "GGN": "the 13-digit GGN number printed next to the 'GGN' heading on the label",
+    "LotNumber": "the lot/batch code printed on the label (e.g. 'L 03-04')",
+    "LabelColor": "the color of the label's printed border/outline frame that runs around its edge -- NOT the color of the paper/background fill behind the text, which is white or cream on every variant. Answer with just the border color, e.g. 'Green', 'Red', 'Purple'"
+  },
+  "field_checks": [
+    {
+      "field": "GGN",
+      "name": "GGN",
+      "expected_pattern": "\\b\\d{13}\\b"
+    },
+    {
+      "field": "LotNumber",
+      "name": "Lot number"
+    }
+  ],
+  "lookup_rules": [
+    {
+      "name": "Variety lookup",
+      "table": "whatsapp-variety",
+      "key": {
+        "VarietyName": "field:Variety"
+      },
+      "query": true,
+      "store_as": "variety"
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Label border color matches variety group",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "LabelColor",
+      "tag_by_variety_group": {
+        "WS": "GREEN",
+        "RS": "RED",
+        "BS": "RED",
+        "BX": "PURPLE",
+        "RX": "PURPLE"
+      }
+    }
+  ]
+}
