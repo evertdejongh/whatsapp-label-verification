@@ -4,7 +4,8 @@
     "PUC": null,
     "Variety": null,
     "GGN": "the 13-digit GGN number printed on the label",
-    "LotNumber": "the lot/batch code printed on the label"
+    "LotNumber": "the lot/batch code printed on the label",
+    "Barcode": "the 13-digit number printed beneath the barcode graphic on the label"
   },
   "field_checks": [
     {
@@ -15,6 +16,11 @@
     {
       "field": "LotNumber",
       "name": "Lot number"
+    },
+    {
+      "field": "Barcode",
+      "name": "Barcode",
+      "expected_pattern": "\\b\\d{13}\\b"
     }
   ],
   "lookup_rules": [
@@ -35,6 +41,21 @@
       },
       "query": true,
       "store_as": "variety"
+    }
+  ],
+  "color_tag_checks": [
+    {
+      "name": "Punnet packaging color matches variety's registered group",
+      "variety_group_source": "result:variety.VarietyGroupCode",
+      "field": "Barcode",
+      "tag_by_variety_group": {
+        "WS": "4050328191924",
+        "RS": "4050328191931",
+        "BS": "4050328191948",
+        "BX": "4051762666733",
+        "RX": "4051762666733",
+        "3X": "4051762666733"
+      }
     }
   ]
 }
