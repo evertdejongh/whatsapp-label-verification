@@ -2209,8 +2209,17 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
             actual_value = extracted_fields.get(field_name)
             actual_text = normalize_zone_text([str(actual_value)]).upper() if actual_value else ""
             if not any(content_matches(tag.upper(), actual_text) for tag in expected_tags):
-                expected_display = " or ".join(f"'{tag}'" for tag in expected_tags)
-                failed_zones.append(f"{check_name} (Expected {expected_display}, label shows '{actual_value}')")
+                # The tag itself is often a printed code (a barcode, an
+                # overprint number) meaningless to whoever reads the result
+                # on WhatsApp -- an optional "tag_labels" map lets the config
+                # supply a human-readable name per tag (e.g. the packaging
+                # color a barcode actually represents) purely for display.
+                # Checks with no such map keep showing the raw tag, same as
+                # before this existed.
+                tag_labels = check.get("tag_labels", {})
+                expected_display = " or ".join(f"'{tag_labels.get(tag, tag)}'" for tag in expected_tags)
+                actual_display = tag_labels.get(actual_value, actual_value) if actual_value else actual_value
+                failed_zones.append(f"{check_name} (Expected {expected_display}, label shows '{actual_display}')")
             else:
                 passed_zones += 1
                 passed_zone_names.append(check_name)
