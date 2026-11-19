@@ -42,6 +42,14 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 # dedicated reference photo of their own yet.
 LABEL_VARIANT_SUFFIXES = ["punnet", "punnet_mix", "33", "39", "5D", "WV", "XU", "YE", "Generic", "pallet", "big", "small"]
 
+# A variant can have more than one valid reference photo -- e.g. 1B's punnet
+# label comes in 4 packaging colors x 2 print-run layouts, all still in
+# circulation -- uploaded as specs/{spec_code}_label_{suffix}.png, then
+# _2.png, _3.png, etc. Most variants only ever have the first file; this
+# just bounds how many numbered extras validate_label_layout bothers probing
+# for per suffix.
+MAX_VARIANT_REFERENCE_IMAGES = 8
+
 # Shown on every real PASS/FAIL result (not on early exits like "wrong spec
 # code" or "config not found", where no actual layout check happened) --
 # this system verifies the label's printed layout/content against the spec,
@@ -1056,7 +1064,10 @@ def classify_label_variant(uploaded_bytes, reference_images, api_key):
     Gemini the spec's own reference photos (the same ones already kept in
     S3 for the /spec info command) side by side with the uploaded photo and
     ask which one it resembles. reference_images maps a name (e.g.
-    "primary", "punnet") to that variant's reference photo bytes.
+    "primary", "punnet") to a list of that variant's reference photo bytes
+    -- usually just one, but more than one when the same named variant has
+    been printed in more than one physically different layout over time and
+    both are still in circulation (e.g. an old and a new punnet design).
     """
     if not api_key or len(reference_images) < 2:
         return None
@@ -1077,13 +1088,20 @@ def classify_label_variant(uploaded_bytes, reference_images, api_key):
         "other a plain white text-only layout) -- that is NOT a match. "
         "Ignore the specific printed values (variety name, codes, "
         "barcodes), which differ between any two real labels regardless of "
-        "design. If the UPLOADED image is not the same design as any "
-        "reference, do not force a match to whichever is merely the "
-        "closest of a bad set of options -- respond with exactly 'NONE'."
+        "design. When the SAME reference name appears more than once below, "
+        "those images are different valid print runs of that one variant "
+        "(e.g. different packaging background colors, or an older vs newer "
+        "layout) -- matching the UPLOADED image to ANY one of them counts "
+        "as matching that name; only compare background color between "
+        "DIFFERENT names, not between images sharing the same name. If the "
+        "UPLOADED image is not the same design as any reference, do not "
+        "force a match to whichever is merely the closest of a bad set of "
+        "options -- respond with exactly 'NONE'."
     )}]
-    for name, img_bytes in reference_images.items():
-        parts.append({"text": f"Reference '{name}':"})
-        parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(img_bytes).decode('utf-8')}})
+    for name, img_list in reference_images.items():
+        for img_bytes in img_list:
+            parts.append({"text": f"Reference '{name}':"})
+            parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(img_bytes).decode('utf-8')}})
     parts.append({"text": "UPLOADED:"})
     parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(uploaded_bytes).decode('utf-8')}})
     parts.append({"text": (
@@ -1416,15 +1434,34 @@ def validate_label_layout(uploaded_bytes, spec_code, debug_key_prefix=None):
         reference_images = {}
         try:
             primary_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=f"specs/{spec_code}_label.png")
-            reference_images["primary"] = primary_obj['Body'].read()
+            reference_images["primary"] = [primary_obj['Body'].read()]
         except ClientError:
             pass
         for suffix in candidate_suffixes:
+            variant_images = []
             try:
                 variant_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=f"specs/{spec_code}_label_{suffix}.png")
-                reference_images[suffix] = variant_obj['Body'].read()
+                variant_images.append(variant_obj['Body'].read())
             except ClientError:
-                continue
+                pass
+            # Some variants have more than one valid reference photo -- e.g.
+            # several packaging colors and/or an old and a new print-run
+            # layout all still in circulation for the same named variant.
+            # Numbered extras (_2, _3, ...) let the classifier recognize any
+            # of them as that one variant, instead of only ever matching
+            # whichever single photo happened to be uploaded as the
+            # reference. Stops at the first gap, so a spec with just one
+            # photo costs nothing extra beyond the one call above.
+            for n in range(2, MAX_VARIANT_REFERENCE_IMAGES + 1):
+                try:
+                    variant_obj_n = s3_client.get_object(
+                        Bucket=BUCKET_NAME, Key=f"specs/{spec_code}_label_{suffix}_{n}.png"
+                    )
+                    variant_images.append(variant_obj_n['Body'].read())
+                except ClientError:
+                    break
+            if variant_images:
+                reference_images[suffix] = variant_images
 
         if len(reference_images) > 1:
             classify_api_key = get_ssm_param('/whatsapp/gemini_api_key')
