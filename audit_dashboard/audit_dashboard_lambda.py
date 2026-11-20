@@ -59,6 +59,15 @@ TABLE_REGISTRY = {
 # the normal key inputs; use the "Extra field" pair to set it manually.
 HIDDEN_TABLE_COLUMNS = {"lookup_key"}
 
+# Without this, column order falls out of whatever order each item's
+# attributes happen to come back from Scan (first-seen across items) --
+# fine when it's an accident, but some tables read better in a specific
+# order. Only list tables that need one; any attribute not listed (or any
+# table not listed at all) keeps falling back to first-seen order.
+TABLE_COLUMN_ORDER = {
+    "whatsapp-edeka-gtins": ["VarietyGroupCode", "VarietyCode", "Pack", "InventoryCode", "GTINpunnet", "GTINcarton"],
+}
+
 ssm = boto3.client('ssm', region_name=AWS_REGION)
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
 s3_client = boto3.client(
@@ -66,6 +75,10 @@ s3_client = boto3.client(
     region_name=AWS_REGION,
     endpoint_url=f'https://s3.{AWS_REGION}.amazonaws.com'
 )
+lambda_client = boto3.client('lambda', region_name=AWS_REGION)
+
+CONFIG_SANITY_FUNCTION_NAME = os.environ.get('CONFIG_SANITY_FUNCTION_NAME', 'whatsapp-config-sanity-check')
+CONFIG_SANITY_RESULTS_TABLE = os.environ.get('CONFIG_SANITY_RESULTS_TABLE', 'whatsapp-config-sanity-results')
 
 RESULT_STYLES = {
     'PASS': ('#1f9d55', '✅'),
@@ -127,6 +140,10 @@ PAGE_STYLE = """
   .pill.no { background:#f3f4f6; color:#6b7280; }
   .hint { color:#8b93a3; font-size:12px; margin-top:8px; }
   .error { color:#b42318; background:#fef3f2; border:1px solid #fda29b; border-radius:6px; padding:8px 12px; font-size:13px; margin-bottom:12px; }
+  .run-card { background:#fff; border:1px solid #dde1e7; border-radius:8px; padding:10px 14px; margin-bottom:10px; }
+  .run-card summary { cursor:pointer; font-size:13px; }
+  .run-card table { margin-top:10px; }
+  code { background:#f5f7f5; border-radius:4px; padding:1px 5px; font-size:12px; }
 """
 
 ROW_SELECT_SCRIPT = """
@@ -335,6 +352,7 @@ def render_nav(token, active):
     <a href="?token={token_qs}&view=catalog" class="{'active' if active == 'catalog' else ''}">Spec Catalog</a>
     <a href="?token={token_qs}&view=tables" class="{'active' if active == 'tables' else ''}">Reference Tables</a>
     <a href="?token={token_qs}&view=files" class="{'active' if active == 'files' else ''}">Spec Files</a>
+    <a href="?token={token_qs}&view=sanity" class="{'active' if active == 'sanity' else ''}">Config Sanity</a>
   </div>"""
 
 
@@ -956,6 +974,9 @@ def handle_tables_get(token, query_params, format_=None):
         for k in item.keys():
             if k not in columns:
                 columns.append(k)
+    preferred_order = TABLE_COLUMN_ORDER.get(table_name)
+    if preferred_order:
+        columns = [c for c in preferred_order if c in columns] + [c for c in columns if c not in preferred_order]
     display_columns = [c for c in columns if c not in HIDDEN_TABLE_COLUMNS]
 
     if format_ == 'json':
@@ -1612,6 +1633,156 @@ def handle_files_post(token, form, format_=None):
 
 
 # ---------------------------------------------------------------------------
+# Config Sanity view -- "Run Now" button + history for the
+# whatsapp-config-sanity-check Lambda (weekly EventBridge schedule; checks
+# every spec's field_checks expected_pattern against the actual allowed
+# value on the last page of that spec's catalog spec-sheet PDF). This
+# dashboard view is detection-only like the Lambda itself: it can trigger a
+# run and show results, never edits a spec config directly -- that stays a
+# local tools/check_allowed_vs_config.py --fix + manual S3 upload step, same
+# as any other config edit (see project memory on check_allowed_vs_config.py
+# for why auto-fixing isn't wired into the live/scheduled path).
+# ---------------------------------------------------------------------------
+
+def query_sanity_runs(limit=10):
+    table = dynamodb.Table(CONFIG_SANITY_RESULTS_TABLE)
+    resp = table.query(
+        KeyConditionExpression=Key('pk').eq('RUN'),
+        ScanIndexForward=False,
+        Limit=limit,
+    )
+    return resp.get('Items', [])
+
+
+def render_sanity_run(run, expanded):
+    run_id = run.get('run_id', '')
+    status = run.get('status', '')
+    triggered_by = run.get('triggered_by', '')
+    specs_checked = run.get('specs_checked', '')
+    mismatches = json.loads(run.get('mismatches', '{}') or '{}')
+    no_pdf = json.loads(run.get('no_pdf_specs', '[]') or '[]')
+    no_checks = json.loads(run.get('no_checks_specs', '[]') or '[]')
+    errored = json.loads(run.get('errored_specs', '[]') or '[]')
+
+    status_color = '#d64545' if status == 'MISMATCHES_FOUND' else '#1f9d55'
+    status_icon = '❌' if status == 'MISMATCHES_FOUND' else '✅'
+
+    mismatch_rows = []
+    for code, field_mismatches in mismatches.items():
+        for m in field_mismatches:
+            mismatch_rows.append(f"""<tr>
+        <td>{html_escape(code)}</td>
+        <td>{html_escape(m.get('name', ''))} <span class="hint">({html_escape(m.get('field', ''))})</span></td>
+        <td>{html_escape(str(m.get('value', '')))}</td>
+        <td><code>{html_escape(m.get('pattern', ''))}</code></td>
+      </tr>""")
+
+    mismatch_table = ""
+    if mismatch_rows:
+        mismatch_table = f"""
+    <table>
+      <thead><tr><th>Spec</th><th>Check</th><th>Spec-sheet PDF shows</th><th>Config expected_pattern</th></tr></thead>
+      <tbody>{''.join(mismatch_rows)}</tbody>
+    </table>"""
+
+    skip_bits = []
+    if no_pdf:
+        skip_bits.append(f"No catalog PDF: {', '.join(sorted(no_pdf))}")
+    if no_checks:
+        skip_bits.append(f"No field_checks configured: {', '.join(sorted(no_checks))}")
+    if errored:
+        skip_bits.append(f"Errored while checking: {', '.join(sorted(errored))}")
+    skip_html = f"<div class='hint'>{html_escape(' &middot; '.join(skip_bits))}</div>" if skip_bits else ""
+
+    open_attr = " open" if expanded else ""
+    return f"""
+  <details class="run-card"{open_attr}>
+    <summary>
+      <span style="color:{status_color}">{status_icon} {html_escape(status)}</span>
+      &middot; {html_escape(format_sast(run_id))} SAST
+      &middot; {html_escape(str(specs_checked))} spec(s) checked
+      &middot; triggered by {html_escape(triggered_by)}
+    </summary>
+    {mismatch_table if mismatch_rows else "<div class='sub'>No mismatches found.</div>"}
+    {skip_html}
+  </details>"""
+
+
+def render_sanity(token, runs, triggered):
+    token_esc = html_escape(token)
+    triggered_html = (
+        "<div class='hint' style='margin-bottom:12px'>Run triggered &mdash; it takes a few minutes "
+        "(~21 specs, one Gemini call each). Refresh this page to see the result.</div>"
+        if triggered else ""
+    )
+
+    if not runs:
+        runs_html = "<div class='sub'>No runs yet.</div>"
+    else:
+        runs_html = render_sanity_run(runs[0], expanded=True) + "".join(
+            render_sanity_run(r, expanded=False) for r in runs[1:]
+        )
+
+    body = f"""
+  <div class="toprow">
+    <div class="sub">Checks every spec's field_checks expected_pattern against its catalog spec-sheet PDF. Runs weekly (Monday 07:00 SAST), or on demand below.</div>
+    <div class="toolbar">
+      <form method="post" style="display:inline">
+        <input type="hidden" name="token" value="{token_esc}">
+        <input type="hidden" name="view" value="sanity">
+        <input type="hidden" name="action" value="run">
+        <button class="btn primary" type="submit">Run Now</button>
+      </form>
+    </div>
+  </div>
+  {triggered_html}
+  {runs_html}
+"""
+    return page_shell("WhatsApp Label Verification - Config Sanity", render_nav(token, 'sanity'), body)
+
+
+def handle_sanity_get(token, query_params, format_=None, triggered=False):
+    try:
+        runs = query_sanity_runs()
+    except Exception as e:
+        logger.error(f"Failed to query config sanity results: {str(e)}")
+        if format_ == 'json':
+            return json_response({'error': str(e)}, status=500)
+        runs = []
+
+    if format_ == 'json':
+        return json_response({'runs': runs})
+
+    return html_response(render_sanity(token, runs, triggered))
+
+
+def handle_sanity_post(token, form, format_=None):
+    action = form.get('action', [''])[0]
+    sanity_qs = f"?token={urllib.parse.quote(token)}&view=sanity"
+
+    if action == 'run':
+        try:
+            lambda_client.invoke(
+                FunctionName=CONFIG_SANITY_FUNCTION_NAME,
+                InvocationType='Event',
+                Payload=json.dumps({'trigger': 'manual'}).encode('utf-8'),
+            )
+        except Exception as e:
+            logger.error(f"Failed to invoke {CONFIG_SANITY_FUNCTION_NAME}: {str(e)}")
+            if format_ == 'json':
+                return json_response({'error': str(e)}, status=500)
+            return text_response(500, f'Failed to trigger run: {str(e)}')
+
+        if format_ == 'json':
+            return json_response({'success': True})
+        return redirect_response(sanity_qs + "&triggered=1")
+
+    if format_ == 'json':
+        return json_response({'error': f'Unknown action: {action}'}, status=400)
+    return redirect_response(sanity_qs)
+
+
+# ---------------------------------------------------------------------------
 # Response helpers
 # ---------------------------------------------------------------------------
 
@@ -1682,6 +1853,11 @@ def lambda_handler(event, context):
             if http_method == 'POST':
                 return handle_files_post(token, form, format_=format_)
             return handle_files_get(token, query_params, format_=format_)
+        elif view == 'sanity':
+            if http_method == 'POST':
+                return handle_sanity_post(token, form, format_=format_)
+            triggered = query_params.get('triggered', '') == '1'
+            return handle_sanity_get(token, query_params, format_=format_, triggered=triggered)
         else:
             return handle_audit_log(token, query_params, format_=format_)
     except Exception as e:
